@@ -82,6 +82,7 @@ def check_if_time_in_subject(subject: str) -> bool:
     first, second = subject.split(')', 1)
     return bool(second.strip())
 
+
 def separate_subject_and_section(subject_with_section: str) -> tuple:
     try:
         parts = subject_with_section.split('(', 1)
