@@ -4,7 +4,7 @@ from pandas import DataFrame, Series
 import numpy as np
 
 # list of working days
-days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
 
 '''
@@ -13,24 +13,24 @@ days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturda
 '''
 
 # database work and stuff
-def make_database():
+def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLASSROOM'):
     '''
     Docstring for making the database and the timetable table
     it only creates the table if it does not already exist but doesnt populate it
     '''
-    conn = sqlite3.connect('uni_timetable.db')
+    conn = sqlite3.connect(db_name)
     crsr = conn.cursor()
 
-    crsr.execute('''CREATE TABLE IF NOT EXISTS timetable (
+    crsr.execute(f'''CREATE TABLE IF NOT EXISTS timetable (
                 ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 DAY TEXT NOT NULL,
                 START_TIME TEXT NOT NULL,
                 END_TIME TEXT NOT NULL,
                 SUBJECT TEXT NOT NULL,
-                CLASSROOM TEXT NOT NULL,
+                {location_column} TEXT NOT NULL,
                 SECTION TEXT NOT NULL,
 
-                UNIQUE(DAY, CLASSROOM, START_TIME) -- to avoid overlapping classes in the same classroom just in case the timetable is incorrect
+                UNIQUE(DAY, {location_column}, START_TIME) -- to avoid overlapping classes in the same classroom just in case the timetable is incorrect
                 )
                 ''')
 
@@ -38,12 +38,14 @@ def make_database():
     conn.commit()
     conn.close()
 
-def get_list_of_dicts_from_df(clean_df: DataFrame) -> list:
+def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -> list:
     '''
     Docstring for get_list_of_dicts_from_df
 
     :param clean_df: DataFrame containing the timetable data
     :type clean_df: DataFrame
+    :param location_col: Column name for room/lab (e.g., 'Room' or 'Lab')
+    :type location_col: str
 
     :returns: list of dictionaries representing the timetable entries
     :rtype: list
@@ -51,23 +53,21 @@ def get_list_of_dicts_from_df(clean_df: DataFrame) -> list:
     timetable_list = []
 
     for idx, row in clean_df.iterrows():
-        room = row['Room']
+        location = row[location_col]
 
-        # Loop through the time columns (skipping the first 'Room' column)
+        # Loop through the time columns (skipping the first column)
         for time_slot in clean_df.columns[1:]:
             subject = row[time_slot]
 
             if subject == "NIL":
                 continue
 
-            # 2. Create a simple object (dictionary) for this single class session
             entry = {
-                'room': room,
+                'location': location,
                 'time_slot': time_slot,
                 'subject': subject,
             }
 
-            # 3. Append this object to our main list
             timetable_list.append(entry)
 
     return timetable_list
@@ -109,7 +109,8 @@ def separate_time_slot(time_slot: str) -> tuple:
     start_time, end_time = time_slot.split('-')
     return start_time.strip(), end_time.strip()
 
-def insert_timetable(clean_df: DataFrame, day: str) -> None:
+def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetable.db',
+                     location_col: str = 'Room', db_location_col: str = 'CLASSROOM') -> None:
     '''
     Docstring for insert_timetable
 
@@ -117,14 +118,20 @@ def insert_timetable(clean_df: DataFrame, day: str) -> None:
     :type clean_df: DataFrame
     :param day: The day of the week for which the timetable is being inserted
     :type day: str
+    :param db_name: Database file name
+    :type db_name: str
+    :param location_col: DataFrame column name ('Room' or 'Lab')
+    :type location_col: str
+    :param db_location_col: Database column name ('CLASSROOM' or 'LAB')
+    :type db_location_col: str
 
     returns: None
     '''
-    conn = sqlite3.connect('uni_timetable.db')
+    conn = sqlite3.connect(db_name)
     crsr = conn.cursor()
 
     # Convert DataFrame to list of dictionaries
-    timetable_list = get_list_of_dicts_from_df(clean_df)
+    timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
     for entry in timetable_list:
         if check_if_time_in_subject(entry['subject']):
@@ -142,10 +149,28 @@ def insert_timetable(clean_df: DataFrame, day: str) -> None:
         entry['end_time'] = end_time
         del entry['time_slot']  # Remove the original time_slot key
 
-        crsr.execute('''
-            INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, CLASSROOM, SECTION)
+        crsr.execute(f'''
+            INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['room'], entry['section']))
+        ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section']))
     conn.commit()
     conn.close()
+
+
+def read_and_clean_classroom_df(excel_file: str, sheet_name: str) -> DataFrame:
+    """Read and clean classroom timetable from Excel."""
+    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=4, nrows=57)
+    clean_df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+    clean_df = clean_df.dropna(subset=['Room'])
+    clean_df = clean_df.fillna("NIL")
+    return clean_df
+
+
+def read_and_clean_lab_df(excel_file: str, sheet_name: str) -> DataFrame:
+    """Read and clean lab timetable from Excel."""
+    dflab = pd.read_excel(excel_file, sheet_name=sheet_name, header=61)
+    clean_dflab = dflab.loc[:, ~dflab.columns.str.contains('^Unnamed')]
+    clean_dflab = clean_dflab.dropna(subset=['Lab'])
+    clean_dflab = clean_dflab.fillna("NIL")
+    return clean_dflab
 
