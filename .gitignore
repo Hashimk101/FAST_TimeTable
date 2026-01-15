@@ -1,0 +1,28 @@
+# Python junk
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter / notebooks (very common to ignore in shared/team projects)
+.ipynb_checkpoints/
+*.ipynb
+
+# VS Code personal settings
+.vscode/
+
+# Windows junk
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Virtual environments (if you create any later)
+venv/
+env/
+.venv/
+
+# Temp files & logs
+*.log
+tempCodeRunnerFile*
+*.tmp
