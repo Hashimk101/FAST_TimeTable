@@ -34,7 +34,7 @@ def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLA
                 )
                 ''')
 
-    crsr.execute(''' CREATE INDEX IF NOT EXISTS idx_day_section ON timetable (DAY, SECTION) ''')
+    crsr.execute(''' CREATE INDEX IF NOT EXISTS idx_day_section ON timetable (DAY, SECTION, SUBJECT) ''')
     conn.commit()
     conn.close()
 
@@ -59,7 +59,18 @@ def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -
         for time_slot in clean_df.columns[1:]:
             subject = row[time_slot]
 
+            # 1. Skip empty cells
             if subject == "NIL":
+                continue
+
+            # 2. Safety Check for Unnamed columns
+            # If the column has no header (Unnamed) AND the subject text
+            # does NOT have a custom time inside it (e.g. "Civics... 02:00"),
+            # then it is likely garbage data. Skip it.
+            is_unnamed_col = "Unnamed" in str(time_slot)
+            has_custom_time = check_if_time_in_subject(str(subject))
+
+            if is_unnamed_col and not has_custom_time:
                 continue
 
             entry = {
@@ -111,48 +122,40 @@ def separate_time_slot(time_slot: str) -> tuple:
 
 def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetable.db',
                      location_col: str = 'Room', db_location_col: str = 'CLASSROOM') -> None:
-    '''
-    Docstring for insert_timetable
-
-    :param clean_df: DataFrame containing the timetable data to be inserted into the database
-    :type clean_df: DataFrame
-    :param day: The day of the week for which the timetable is being inserted
-    :type day: str
-    :param db_name: Database file name
-    :type db_name: str
-    :param location_col: DataFrame column name ('Room' or 'Lab')
-    :type location_col: str
-    :param db_location_col: Database column name ('CLASSROOM' or 'LAB')
-    :type db_location_col: str
-
-    returns: None
-    '''
     conn = sqlite3.connect(db_name)
     crsr = conn.cursor()
 
-    # Convert DataFrame to list of dictionaries
     timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
     for entry in timetable_list:
+        # Case 1: Time is in the text (like Civics 02:00-03:45)
         if check_if_time_in_subject(entry['subject']):
             subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
             entry['subject'] = subject
             entry['section'] = section
             entry['time_slot'] = time_slot
+
+        # Case 2: Time is in the header (Standard classes)
         else:
+            # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
+            if "Unnamed" in str(entry['time_slot']):
+                continue
+
             subject, section = separate_subject_and_section(entry['subject'])
             entry['subject'] = subject
             entry['section'] = section
 
+        # Now it is safe to split
         start_time, end_time = separate_time_slot(entry['time_slot'])
         entry['start_time'] = start_time
         entry['end_time'] = end_time
-        del entry['time_slot']  # Remove the original time_slot key
 
+        # ... rest of the insertion code ...
         crsr.execute(f'''
             INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION)
             VALUES (?, ?, ?, ?, ?, ?)
         ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section']))
+
     conn.commit()
     conn.close()
 
@@ -160,17 +163,89 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
 def read_and_clean_classroom_df(excel_file: str, sheet_name: str) -> DataFrame:
     """Read and clean classroom timetable from Excel."""
     df = pd.read_excel(excel_file, sheet_name=sheet_name, header=4, nrows=57)
-    clean_df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-    clean_df = clean_df.dropna(subset=['Room'])
+
+    # REMOVED THIS LINE:
+    # clean_df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+
+    # Keep all columns, just drop rows where Room is NaN
+    clean_df = df.dropna(subset=['Room'])
     clean_df = clean_df.fillna("NIL")
     return clean_df
-
 
 def read_and_clean_lab_df(excel_file: str, sheet_name: str) -> DataFrame:
     """Read and clean lab timetable from Excel."""
     dflab = pd.read_excel(excel_file, sheet_name=sheet_name, header=61)
-    clean_dflab = dflab.loc[:, ~dflab.columns.str.contains('^Unnamed')]
-    clean_dflab = clean_dflab.dropna(subset=['Lab'])
+
+    # REMOVED THIS LINE:
+    # clean_dflab = dflab.loc[:, ~dflab.columns.str.contains('^Unnamed')]
+
+    # Keep all columns, just drop rows where Lab is NaN
+    clean_dflab = dflab.dropna(subset=['Lab'])
     clean_dflab = clean_dflab.fillna("NIL")
     return clean_dflab
+
+
+
+class subjectEntry:
+    def __init__(self, starttime: str, endtime: str, subject: str, location: str):
+        self.starttime = starttime
+        self.endtime = endtime
+        self.subject = subject
+        self.location = location
+    def __repr__(self):
+        return f"subjectEntry(starttime={self.starttime}, endtime={self.endtime}, subject={self.subject}, location={self.location})"
+    def display(self):
+        print(f"{self.starttime} - {self.endtime} : {self.subject} at {self.location}")
+
+    def __str__(self):
+        return f"{self.starttime}-{self.endtime}: {self.subject} @ {self.location}"
+
+
+def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list) -> list:
+    # 0 to 4 -> Monday to Friday
+    list_of_days_in_timetable = []
+
+    # Return empty structure if no subjects provided
+    if not list_of_subs:
+        return [[] for _ in range(5)] # Assuming 5 days
+
+    # Prepare the placeholder string (e.g., "?, ?, ?") for the SQL IN clause
+    placeholders = ', '.join('?' for _ in list_of_subs)
+
+    with sqlite3.connect(db_name) as conn:
+        cursor = conn.cursor()
+
+        for day in days_of_week:
+            list_of_subs_per_day = []
+
+            # 1. THE INDEX (DAY, SECTION, SUBJECT) handles the WHERE clause efficiently.
+            # 2. THE ORDER BY 3 ensures the result is sorted by Start Time (rows[2]),
+            #    fixing the "Math before English" issue.
+            query = f'''
+                SELECT * FROM timetable
+                WHERE DAY = ?
+                AND SECTION = ?
+                AND SUBJECT IN ({placeholders})
+                ORDER BY 3 ASC
+            '''
+
+            # Combine parameters: Day, Section, then the list of subjects
+            params = [day, section] + list_of_subs
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            for row in rows:
+                # row[2]=start, row[3]=end, row[4]=subject, row[5]=location
+                subval = subjectEntry(
+                    starttime=row[2],
+                    endtime=row[3],
+                    subject=row[4],
+                    location=row[5]
+                )
+                list_of_subs_per_day.append(subval)
+
+            list_of_days_in_timetable.append(list_of_subs_per_day)
+
+    return list_of_days_in_timetable
 

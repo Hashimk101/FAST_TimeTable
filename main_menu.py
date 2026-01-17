@@ -141,6 +141,25 @@ def display_subs_in_list(subList: list) -> int | None:
 
 
 
+def get_section_and_course() -> tuple[str, str]:
+    '''
+    gets the section and course from the user
+    returns a tuple of (section, course)
+    '''
+    section = input("Enter your section (e.g., A, B, C): ").strip().upper()
+    while not "A" <= section <= "G":
+        print("Invalid section. Defaulting to 'A'.")
+        section = input("Enter your section (e.g., A, B, C): ").strip().upper()
+
+    list_of_courses = ["CS", "SE", "DS AI", "CE", "CYS"]
+    course = input("Enter your course (e.g., CS, SE, DS AI): ").strip().upper()
+    while course not in list_of_courses:
+        print("Invalid course. Please enter a valid course code.")
+        course = input("Enter your course (e.g., CS, SE, DS AI): ").strip().upper()
+
+    return (section, course)
+
+
 
 #---------------------------#
 #---------------------------#
@@ -150,9 +169,9 @@ def display_subs_in_list(subList: list) -> int | None:
 #---------------------------#
 #---------------------------#
 
-
-def main_menu() -> None:
+def main_menu() -> list:
     semester = select_semester()
+    section, course = get_section_and_course()
     print("These are the subjects that are offered in this semester: \n")
     list_of_subs = retrieve_subjects(semester)
 
@@ -198,6 +217,13 @@ def main_menu() -> None:
 
     for subs in list_of_subs:
         print(subs)
+
+    list_of_reqs = []
+    list_of_reqs.append(list_of_subs)
+    list_of_reqs.append(course)
+    list_of_reqs.append(section)
+
+    return list_of_reqs
 
 
 # Testing stuff
