@@ -2,6 +2,13 @@ import sqlite3
 import pandas as pd
 from pandas import DataFrame, Series
 import numpy as np
+import os.path
+import re
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import sheets_to_df
 
 # list of working days
 days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -33,6 +40,8 @@ def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLA
                 UNIQUE(DAY, {location_column}, START_TIME) -- to avoid overlapping classes in the same classroom just in case the timetable is incorrect
                 )
                 ''')
+    
+    crsr.execute("DELETE FROM timetable")
 
     crsr.execute(''' CREATE INDEX IF NOT EXISTS idx_day_section ON timetable (DAY, SECTION, SUBJECT) ''')
     conn.commit()
@@ -91,7 +100,9 @@ def check_if_time_in_subject(subject: str) -> bool:
     if not ')' in subject:
         return False
     first, second = subject.split(')', 1)
-    return bool(second.strip())
+    if not second.strip():
+        return False
+    return '-' in second and ':' in second
 
 def separate_subject_and_section(subject_with_section: str) -> tuple:
     try:
@@ -117,72 +128,87 @@ def separate_time_and_section_from_subject(subject: str) -> tuple:
 
 
 def separate_time_slot(time_slot: str) -> tuple:
-    start_time, end_time = time_slot.split('-')
-    return start_time.strip(), end_time.strip()
+    match = re.search(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', time_slot)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    
+    # Fallback to original split if regex doesn't match
+    parts = time_slot.split('-')
+    if len(parts) >= 2:
+        return parts[0].strip(), parts[1].strip()
+    return time_slot, time_slot
 
 def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetable.db',
                      location_col: str = 'Room', db_location_col: str = 'CLASSROOM') -> None:
     conn = sqlite3.connect(db_name)
-    crsr = conn.cursor()
+    try:
+        crsr = conn.cursor()
 
-    timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
+        timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
-    for entry in timetable_list:
-        # Case 1: Time is in the text (like Civics 02:00-03:45)
-        if check_if_time_in_subject(entry['subject']):
-            subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
-            entry['subject'] = subject
-            entry['section'] = section
-            entry['time_slot'] = time_slot
+        for entry in timetable_list:
+            # Case 1: Time is in the text (like Civics 02:00-03:45)
+            if check_if_time_in_subject(entry['subject']):
+                subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
+                entry['subject'] = subject
+                entry['section'] = section
+                entry['time_slot'] = time_slot
 
-        # Case 2: Time is in the header (Standard classes)
+            # Case 2: Time is in the header (Standard classes)
+            else:
+                # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
+                if "Unnamed" in str(entry['time_slot']):
+                    continue
+
+                subject, section = separate_subject_and_section(entry['subject'])
+                entry['subject'] = subject
+                entry['section'] = section
+
+            # Now it is safe to split
+            start_time, end_time = separate_time_slot(entry['time_slot'])
+            entry['start_time'] = start_time
+            entry['end_time'] = end_time
+
+            # ... rest of the insertion code ...
+            crsr.execute(f'''
+                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section']))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_sheets_service():
+    scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', scopes)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
         else:
-            # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
-            if "Unnamed" in str(entry['time_slot']):
-                continue
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', scopes)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return build('sheets', 'v4', credentials=creds)
 
-            subject, section = separate_subject_and_section(entry['subject'])
-            entry['subject'] = subject
-            entry['section'] = section
+def get_raw_sheet(service, spreadsheet_id, sheet_name):
+    sheet = service.spreadsheets()
+    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
+    return result.get('values', [])
 
-        # Now it is safe to split
-        start_time, end_time = separate_time_slot(entry['time_slot'])
-        entry['start_time'] = start_time
-        entry['end_time'] = end_time
+def read_and_clean_classroom_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
+    """Read and clean classroom timetable from Google Sheets."""
+    raw_values = get_raw_sheet(service, spreadsheet_id, sheet_name)
+    return sheets_to_df.sheets_to_classroom_df(raw_values)
 
-        # ... rest of the insertion code ...
-        crsr.execute(f'''
-            INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section']))
-
-    conn.commit()
-    conn.close()
-
-
-def read_and_clean_classroom_df(excel_file: str, sheet_name: str) -> DataFrame:
-    """Read and clean classroom timetable from Excel."""
-    df = pd.read_excel(excel_file, sheet_name=sheet_name, header=4, nrows=57)
-
-    # REMOVED THIS LINE:
-    # clean_df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-
-    # Keep all columns, just drop rows where Room is NaN
-    clean_df = df.dropna(subset=['Room'])
-    clean_df = clean_df.fillna("NIL")
-    return clean_df
-
-def read_and_clean_lab_df(excel_file: str, sheet_name: str) -> DataFrame:
-    """Read and clean lab timetable from Excel."""
-    dflab = pd.read_excel(excel_file, sheet_name=sheet_name, header=61)
-
-    # REMOVED THIS LINE:
-    # clean_dflab = dflab.loc[:, ~dflab.columns.str.contains('^Unnamed')]
-
-    # Keep all columns, just drop rows where Lab is NaN
-    clean_dflab = dflab.dropna(subset=['Lab'])
-    clean_dflab = clean_dflab.fillna("NIL")
-    return clean_dflab
+def read_and_clean_lab_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
+    """Read and clean lab timetable from Google Sheets."""
+    raw_values = get_raw_sheet(service, spreadsheet_id, sheet_name)
+    return sheets_to_df.sheets_to_lab_df(raw_values)
 
 
 
@@ -219,14 +245,11 @@ def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list) 
             list_of_subs_per_day = []
 
             # 1. THE INDEX (DAY, SECTION, SUBJECT) handles the WHERE clause efficiently.
-            # 2. THE ORDER BY 3 ensures the result is sorted by Start Time (rows[2]),
-            #    fixing the "Math before English" issue.
             query = f'''
                 SELECT * FROM timetable
                 WHERE DAY = ?
                 AND SECTION = ?
                 AND SUBJECT IN ({placeholders})
-                ORDER BY 3 ASC
             '''
 
             # Combine parameters: Day, Section, then the list of subjects
@@ -234,6 +257,17 @@ def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list) 
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
+            
+            def parse_time(time_str):
+                try:
+                    h, m = map(int, time_str.split(':'))
+                    if 1 <= h <= 7:
+                        h += 12
+                    return h * 60 + m
+                except Exception:
+                    return 0
+                    
+            rows.sort(key=lambda r: parse_time(r[2]))
 
             for row in rows:
                 # row[2]=start, row[3]=end, row[4]=subject, row[5]=location
