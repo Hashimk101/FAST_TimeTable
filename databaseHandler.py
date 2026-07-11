@@ -92,6 +92,60 @@ def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -
 
     return timetable_list
 
+def clean_section(raw_section: str) -> str:
+    '''
+    Cleans the raw section string extracted from the Google Sheet.
+    Handles all known formatting patterns:
+      1. "CS-C, 24"          -> "CS-C"       (strip batch year)
+      2. "CS-C  D-314"       -> "CS-C"       (strip room code leaked in)
+      3. "DS-A  in Room no. D-405" -> "DS-A" (strip room redirect text)
+      4. "AI-A, 22 ReSch"    -> "AI-A"       (strip batch + ReSch)
+      5. "CS-B, G-I"         -> "CS-B, G-I"  (keep group identifiers)
+      6. "SE-A Audi (G-Flr, Blk-D" -> "SE-A" (strip venue info)
+      7. "CS-C, 25 Cancelled\nOOP Lab..." -> "CS-C" (strip multiline junk)
+    '''
+    section = raw_section.strip()
+    if not section:
+        return section
+
+    # Remove newlines and everything after them (multiline junk)
+    if '\n' in section:
+        section = section.split('\n')[0].strip()
+
+    # Remove "in Room no. XXX" suffixes
+    in_room_match = re.search(r'\s+in\s+Room\s+no\.\s*\S+', section, re.IGNORECASE)
+    if in_room_match:
+        section = section[:in_room_match.start()].strip()
+
+    # Remove ReSch / Cancelled / Reserved / "on for ..." suffixes
+    section = re.sub(r'\s+(ReSch|Cancelled|Reserved|on for .*)$', '', section, flags=re.IGNORECASE).strip()
+
+    # Remove "Audi ..." or venue info after the section code
+    audi_match = re.search(r'\s+Audi\s', section)
+    if audi_match:
+        section = section[:audi_match.start()].strip()
+
+    # Now handle the comma-separated part.
+    # Valid: "CS-B, G-I", "DS, Gp-II", "DS-A, Gp-I"
+    # Invalid: "CS-C, 24", "AI-A, 22", "CS-A, 25"
+    if ',' in section:
+        parts = section.split(',', 1)
+        after_comma = parts[1].strip()
+        # If the part after the comma is a 2-digit number (batch year), strip it
+        if re.match(r'^\d{2}$', after_comma):
+            section = parts[0].strip()
+        # If it starts with a 2-digit number followed by space+junk, strip it
+        elif re.match(r'^\d{2}\s', after_comma):
+            section = parts[0].strip()
+        # Otherwise keep it (it's a group identifier like G-I, Gp-II)
+
+    # Remove trailing room codes like "D-314", "D-414", "A-104"
+    # These are room patterns: single letter + dash + digits
+    section = re.sub(r'\s+[A-Z]-\d{3,4}$', '', section).strip()
+
+    return section
+
+
 def check_if_time_in_subject(subject: str) -> bool:
     '''
         in the uni's xlsx file, some slots have timeslot included in the subject name itself(shitty design)
@@ -108,8 +162,13 @@ def separate_subject_and_section(subject_with_section: str) -> tuple:
     try:
         parts = subject_with_section.split('(', 1)
         subject = parts[0].strip()
-        section = parts[1].replace(')', '').strip()
-        return subject, section
+        # Only take what's inside the parentheses, not after them
+        inside_paren = parts[1]
+        if ')' in inside_paren:
+            section = inside_paren.split(')', 1)[0].strip()
+        else:
+            section = inside_paren.strip()
+        return subject, clean_section(section)
     except IndexError:
         # This runs for "NIL" or any cell without a '('
         return subject_with_section, ""
@@ -124,7 +183,7 @@ def separate_time_and_section_from_subject(subject: str) -> tuple:
     '''
     subject, second = subject.split('(', 1)
     section, time_slot = second.split(')', 1)
-    return subject.strip(), section.strip(), time_slot.strip()
+    return subject.strip(), clean_section(section.strip()), time_slot.strip()
 
 
 def separate_time_slot(time_slot: str) -> tuple:
