@@ -135,6 +135,7 @@ let lastConfig = null;
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
     
+    const batch = document.getElementById('batch-input').value;
     const course = document.getElementById('course-input').value;
     const section = document.getElementById('section-input').value.trim().toUpperCase();
     
@@ -161,17 +162,23 @@ form.addEventListener('submit', async (e) => {
         const res = await fetch('/api/timetable', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ course, section, subjects: selectedSubjects })
+            body: JSON.stringify({ batch, course, section, subjects: selectedSubjects })
         });
         const data = await res.json();
         
         if (data.status === 'success') {
-            lastConfig = { course, section, subjects: selectedSubjects, names: selectedNames };
+            lastConfig = { batch, course, section, subjects: selectedSubjects, names: selectedNames };
+            
+            // Save preferences
+            localStorage.setItem('batch', batch);
+            localStorage.setItem('course', course);
+            localStorage.setItem('section', section);
+
             renderTimetable(data.timetable);
-            updateStatusBar(course, section, selectedSubjects, selectedNames);
+            updateStatusBar(batch, course, section, selectedSubjects, selectedNames);
             
             // Update configure button
-            openBtn.innerHTML = `${gearSvg} ${course}-${section}`;
+            openBtn.innerHTML = `${gearSvg} ${batch}-${course}-${section}`;
             
             // Show grid, hide empty state
             document.getElementById('empty-state').style.display = 'none';
@@ -190,14 +197,24 @@ form.addEventListener('submit', async (e) => {
     }
 });
 
+// Load preferences on startup
+window.addEventListener('DOMContentLoaded', () => {
+    const savedBatch = localStorage.getItem('batch');
+    const savedCourse = localStorage.getItem('course');
+    const savedSection = localStorage.getItem('section');
+    if (savedBatch) document.getElementById('batch-input').value = savedBatch;
+    if (savedCourse) document.getElementById('course-input').value = savedCourse;
+    if (savedSection) document.getElementById('section-input').value = savedSection;
+});
+
 // === Status Bar ===
-function updateStatusBar(course, section, subjects, names) {
+function updateStatusBar(batch, course, section, subjects, names) {
     const bar = document.getElementById('status-bar');
     const label = document.getElementById('status-label');
     const pills = document.getElementById('subject-pills');
     
     bar.style.display = 'block';
-    label.textContent = `${course}-${section}`;
+    label.textContent = `${batch}-${course}-${section}`;
     pills.innerHTML = '';
     
     subjects.forEach((sub, i) => {
