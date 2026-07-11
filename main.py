@@ -5,31 +5,35 @@ from databaseHandler import (
     read_and_clean_classroom_df,
     read_and_clean_lab_df,
     fetch_timetable_for_section,
-    days_of_week
+    days_of_week,
+    get_sheets_service
 )
 
 from main_menu import (
     main_menu
 )
 
-EXCEL_FILE = "Time-Table, FSC, Fall-2025.xlsx"
+SPREADSHEET_ID = "1ZQJqdArlwCS965uw4sbJrB6j8rEPfZerMT7X8qkXSzY"
 
 COURSE_DATABASE = "uni_timetable.db"
 LAB_DATABASE = "uni_timetable_lab.db"
+
 def main():
-    # Create both databases
+    # 1. Create databases and get timetable data from google sheets
     make_database(COURSE_DATABASE, 'CLASSROOM')
     make_database(LAB_DATABASE, 'LAB')
-    # Process each day
+    
+    service = get_sheets_service()
+
     for day in days_of_week:
         try:
-            # Process classrooms
-            clean_df = read_and_clean_classroom_df(EXCEL_FILE, day)
+            # classroom setup
+            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, day)
             insert_timetable(clean_df, day, COURSE_DATABASE, 'Room', 'CLASSROOM')
             print(f"Inserted classroom timetable for {day}")
-
-            # Process labs
-            clean_dflab = read_and_clean_lab_df(EXCEL_FILE, day)
+            
+            # lab setup
+            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, day)
             insert_timetable(clean_dflab, day, LAB_DATABASE, 'Lab', 'LAB')
             print(f"Inserted lab timetable for {day}")
 
