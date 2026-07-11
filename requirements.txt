@@ -3,3 +3,5 @@ google-auth>=2.0.0
 google-auth-httplib2>=0.1.0
 pandas
 openpyxl
+flask
+flask-cors
