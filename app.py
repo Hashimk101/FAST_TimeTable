@@ -7,8 +7,10 @@ from databaseHandler import fetch_timetable_for_section
 app = Flask(__name__, static_folder='frontend', static_url_path='')
 CORS(app)
 
-SUBJECTS_DB = "subjects.db"
-COURSE_DB = "uni_timetable.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SUBJECTS_DB = os.path.join(BASE_DIR, "subjects.db")
+COURSE_DB = os.path.join(BASE_DIR, "uni_timetable.db")
+LAB_DB = os.path.join(BASE_DIR, "uni_timetable_lab.db")
 
 # Route to serve the main frontend HTML
 @app.route('/')
@@ -46,9 +48,8 @@ def get_timetable():
     cosec = f"{course}-{section}"
     
     try:
-        # fetch_timetable_for_section returns a list of days, each day is a list of subjectEntry objects
         raw_timetable_course = fetch_timetable_for_section(COURSE_DB, cosec, subjects)
-        raw_timetable_lab = fetch_timetable_for_section("uni_timetable_lab.db", cosec, subjects)
+        raw_timetable_lab = fetch_timetable_for_section(LAB_DB, cosec, subjects)
         
         raw_timetable = []
         for i in range(5):
