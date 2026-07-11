@@ -8,7 +8,7 @@
   --border-color: #2E2A26;
   --text-primary: #F0ECE8;
   --text-secondary: #9A918A;
-  --text-tertiary: #5E5650;
+  --text-tertiary: #786F67;
   
   --accent: #C49A7C;
   --accent-hover: #D9B092;
@@ -41,7 +41,7 @@
   --border-color: #DDD6CD;
   --text-primary: #1C1917;
   --text-secondary: #5C554E;
-  --text-tertiary: #9A938C;
+  --text-tertiary: #847C75;
   
   --accent: #A07050;
   --accent-hover: #8A5E40;
@@ -414,7 +414,7 @@ body {
 .subject-card .card-location {
   margin: 4px 0 0 0;
   font-size: 0.7rem;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 4px;
