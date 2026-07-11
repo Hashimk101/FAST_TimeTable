@@ -79,6 +79,10 @@ def _extract_section(df: DataFrame, header_row_idx: int,
     Skips rows where the location cell is empty or equals the separator keyword.
     """
     records = []
+    
+    # Sort the slots by their starting column index
+    sorted_slots = sorted(slot_mapping.items(), key=lambda x: x[1])
+
     for i in range(header_row_idx + 1, len(df)):
         row = df.iloc[i]
         location = str(row.iloc[location_col_idx]).strip()
@@ -90,9 +94,22 @@ def _extract_section(df: DataFrame, header_row_idx: int,
             continue
 
         entry = {location_col_name: location}
-        for slot, col_idx in slot_mapping.items():
-            val = str(row.iloc[col_idx]).strip() if col_idx < len(row) else ""
-            entry[slot] = val if val and val != "nan" else "NIL"
+        
+        for j in range(len(sorted_slots)):
+            slot, start_col = sorted_slots[j]
+            # The block ends where the next slot begins, or at the end of the row
+            end_col = sorted_slots[j+1][1] if j+1 < len(sorted_slots) else len(row)
+            
+            # Scan all columns in this timeslot block for non-empty text
+            block_vals = []
+            for c in range(start_col, end_col):
+                val = str(row.iloc[c]).strip() if c < len(row) else ""
+                if val and val != "nan":
+                    block_vals.append(val)
+            
+            # If multiple subjects are found in the same block, join them (though usually there's only 1)
+            final_val = " | ".join(block_vals) if block_vals else "NIL"
+            entry[slot] = final_val
 
         records.append(entry)
 
