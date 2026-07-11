@@ -87,6 +87,15 @@
                 <form id="config-form">
                     <div class="form-row">
                         <div class="form-group">
+                            <label for="batch-input">Batch</label>
+                            <select id="batch-input" required>
+                                <option value="25">2025</option>
+                                <option value="24">2024</option>
+                                <option value="23">2023</option>
+                                <option value="22">2022</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="course-input">Course</label>
                             <select id="course-input" required>
                                 <option value="CS">CS</option>
@@ -101,7 +110,7 @@
                         </div>
                         <div class="form-group">
                             <label for="section-input">Section</label>
-                            <input type="text" id="section-input" placeholder="e.g. A, B" maxlength="3" required>
+                            <input type="text" id="section-input" placeholder="e.g. A" maxlength="3" required>
                         </div>
                     </div>
                     

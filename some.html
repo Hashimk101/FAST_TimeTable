@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Timetable Grid View Mockup - Earthy Theme</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  :root {
+    /* "The Terracotta" Dark Theme */
+    --bg-color: #1A1512;
+    --surface-color: #241E1A;
+    --border-color: #352B25;
+    --text-primary: #F2EBE5;
+    --text-secondary: #A8988A;
+
+    --accent-terracotta: #D48C6B;
+    --accent-sage: #8FAA9B;
+    --accent-empty: #2C2520;
+    --now-indicator: #E3A87C;
+
+    --accent-text-dark: #1A1512;
+
+    /* Time settings */
+    --day-start: 8;
+    --day-end: 18;
+    --hour-height: 80px;
+    --grid-gap: 15px;
+  }
+
+  [data-theme="light"] {
+    /* "Creme & Beige" Light Theme */
+    --bg-color: #FDFBF7;
+    --surface-color: #F4EFEA;
+    --border-color: #E6DDD5;
+    --text-primary: #2C2520;
+    --text-secondary: #7A6F66;
+
+    --accent-terracotta: #C67856;
+    --accent-sage: #7A9988;
+    --accent-empty: #EFE8E2;
+    --now-indicator: #D18D5C;
+
+    --accent-text-dark: #FDFBF7; /* Using light text for contrast against solid accents */
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-color);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* Header Styles */
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 40px;
+    background: var(--surface-color);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    transition: background-color 0.3s ease, border-color 0.3s ease;
+  }
+
+  .app-header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .app-header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--text-primary);
+  }
+
+  .theme-toggle {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9rem;
+    transition: all 0.2s ease;
+  }
+
+  .theme-toggle:hover {
+    background: var(--border-color);
+  }
+
+  .batch-selector {
+    padding: 10px 20px;
+    border-radius: 8px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 500;
+    outline: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s ease;
+  }
+
+  .batch-selector:hover {
+    border-color: var(--text-secondary);
+  }
+
+  /* Timetable Grid */
+  .timetable-container {
+    padding: 40px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  .week-grid {
+    display: grid;
+    grid-template-columns: 60px repeat(5, 1fr);
+    gap: var(--grid-gap);
+    position: relative;
+  }
+
+  /* Time Markers */
+  .time-column {
+    display: flex;
+    flex-direction: column;
+    margin-top: 50px;
+  }
+
+  .time-marker {
+    height: var(--hour-height);
+    display: flex;
+    justify-content: flex-end;
+    padding-right: 15px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    position: relative;
+  }
+
+  .time-marker::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 100%;
+    width: calc(100vw - 140px);
+    max-width: 1500px;
+    height: 1px;
+    background: var(--border-color);
+    z-index: 0;
+  }
+
+  /* Example Now Indicator Line */
+  .now-indicator {
+    position: absolute;
+    top: 360px; /* Example static position for 12:00 */
+    left: 60px;
+    width: calc(100% - 60px);
+    height: 2px;
+    background-color: var(--now-indicator);
+    z-index: 5;
+    pointer-events: none;
+    box-shadow: 0 0 8px rgba(227, 168, 124, 0.4);
+  }
+
+  .now-indicator::before {
+    content: 'Now';
+    position: absolute;
+    left: -40px;
+    top: -8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--now-indicator);
+  }
+
+  /* Day Columns */
+  .day-column {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-color);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+  }
+
+  .day-header {
+    text-align: center;
+    font-weight: 600;
+    padding: 15px 0;
+    color: var(--text-secondary);
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  /* Subject Cards - Solid Colors */
+  .subject-card {
+    position: absolute;
+    width: calc(100% - 16px);
+    left: 8px;
+    border-radius: 6px;
+    padding: 10px 14px;
+    background: var(--color);
+    color: var(--accent-text-dark);
+    box-sizing: border-box;
+    overflow: hidden;
+    transition: transform 0.2s ease, filter 0.2s ease;
+    z-index: 10;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    border: none;
+
+    top: calc(((var(--start) - var(--day-start)) * var(--hour-height)) + 51px);
+    height: calc(var(--duration) * var(--hour-height) - 6px);
+  }
+
+  .subject-card:hover {
+    transform: scale(1.02);
+    filter: brightness(1.1);
+    z-index: 20;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+  }
+
+  .subject-card h3 {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+
+  .subject-card p {
+    margin: 4px 0 0 0;
+    font-size: 0.8rem;
+    opacity: 0.9;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+  }
+
+  .subject-card svg {
+    opacity: 0.8;
+  }
+
+  /* Responsive Design */
+  @media (max-width: 1000px) {
+    .time-column { display: none; }
+    .now-indicator { display: none; }
+    .week-grid {
+      grid-template-columns: 1fr;
+      gap: 30px;
+    }
+    .day-column {
+      background: transparent;
+      border: none;
+    }
+    .day-header {
+      text-align: left;
+      border-bottom: 2px solid var(--border-color);
+      padding-bottom: 10px;
+      margin-bottom: 15px;
+      color: var(--text-primary);
+    }
+    .subject-card {
+      position: relative;
+      top: auto !important;
+      height: auto !important;
+      margin-bottom: 12px;
+      width: 100%;
+      left: 0;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="app-header-left">
+    <h1>Timetable.</h1>
+    <button class="theme-toggle" onclick="toggleTheme()">☀️ Light Mode</button>
+  </div>
+  <select class="batch-selector">
+    <option>CS-B (Spring 2026)</option>
+    <option>SE-A (Spring 2026)</option>
+  </select>
+</header>
+
+<main class="timetable-container">
+  <div class="week-grid">
+    <div class="time-column">
+      <div class="time-marker">08:00</div>
+      <div class="time-marker">09:00</div>
+      <div class="time-marker">10:00</div>
+      <div class="time-marker">11:00</div>
+      <div class="time-marker">12:00</div>
+      <div class="time-marker">13:00</div>
+      <div class="time-marker">14:00</div>
+      <div class="time-marker">15:00</div>
+      <div class="time-marker">16:00</div>
+      <div class="time-marker">17:00</div>
+    </div>
+
+    <div class="now-indicator"></div>
+
+    <!-- Monday -->
+    <div class="day-column">
+      <div class="day-header">Monday</div>
+
+      <!-- Lectures (Terracotta) -->
+      <article class="subject-card" style="--start: 8.5; --duration: 1.33; --color: var(--accent-terracotta);">
+        <h3>Operating Systems</h3>
+        <p>08:30 - 09:50</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> D-301</p>
+      </article>
+
+      <article class="subject-card" style="--start: 10; --duration: 1.33; --color: var(--accent-terracotta);">
+        <h3>Database Systems</h3>
+        <p>10:00 - 11:20</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> D-301</p>
+      </article>
+
+      <!-- Break / Free Period (Accent Empty) -->
+      <article class="subject-card" style="--start: 11.5; --duration: 1.33; --color: var(--accent-empty); color: var(--text-secondary);">
+        <h3>Lunch Break</h3>
+        <p>11:30 - 12:50</p>
+      </article>
+
+      <!-- Seminar / Lab (Sage) -->
+      <article class="subject-card" style="--start: 13; --duration: 1.33; --color: var(--accent-sage);">
+        <h3>AI Seminar</h3>
+        <p>01:00 PM - 02:20 PM</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> D-301</p>
+      </article>
+    </div>
+
+    <!-- Tuesday -->
+    <div class="day-column">
+      <div class="day-header">Tuesday</div>
+
+      <article class="subject-card" style="--start: 8.5; --duration: 1.33; --color: var(--accent-sage);">
+        <h3>Computer Networks</h3>
+        <p>08:30 - 09:50</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> D-306</p>
+      </article>
+
+      <article class="subject-card" style="--start: 10; --duration: 1.33; --color: var(--accent-terracotta);">
+        <h3>Software Design</h3>
+        <p>10:00 - 11:20</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> D-306</p>
+      </article>
+    </div>
+
+    <!-- Wednesday -->
+    <div class="day-column">
+      <div class="day-header">Wednesday</div>
+
+      <article class="subject-card" style="--start: 10; --duration: 1.33; --color: var(--accent-terracotta);">
+        <h3>Programming Fund.</h3>
+        <p>10:00 - 11:20</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> C-302</p>
+      </article>
+    </div>
+
+    <!-- Thursday -->
+    <div class="day-column">
+      <div class="day-header">Thursday</div>
+
+      <article class="subject-card" style="--start: 8.5; --duration: 1.75; --color: var(--accent-sage);">
+        <h3>Islamic Studies</h3>
+        <p>08:30 - 10:15</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> C-305</p>
+      </article>
+
+      <article class="subject-card" style="--start: 11.5; --duration: 1.33; --color: var(--accent-terracotta);">
+        <h3>Automata</h3>
+        <p>11:30 - 12:50</p>
+        <p><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> C-408</p>
+      </article>
+    </div>
+
+    <!-- Friday -->
+    <div class="day-column">
+      <div class="day-header">Friday</div>
+    </div>
+  </div>
+</main>
+
+<script>
+  function toggleTheme() {
+    const html = document.documentElement;
+    const btn = document.querySelector('.theme-toggle');
+    if (html.getAttribute('data-theme') === 'dark') {
+      html.setAttribute('data-theme', 'light');
+      btn.innerText = '🌙 Dark Mode';
+    } else {
+      html.setAttribute('data-theme', 'dark');
+      btn.innerText = '☀️ Light Mode';
+    }
+  }
+</script>
+</body>
+</html>
