@@ -28,7 +28,7 @@ tempCodeRunnerFile*
 *.tmp
 
 # Generated databases
-*.db
+# *.db (removed to allow Vercel to read them)
 
 # Google auth secrets
 credentials.json
