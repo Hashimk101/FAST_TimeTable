@@ -3,23 +3,6 @@ import subprocess
 import sqlite3
 
 subjects_database = "subjects.db"
-total_semesters = 8
-
-def select_semester() -> int:
-    '''
-    returns the semester number selected by the user as an integer(1-8 inclusive)
-    '''
-    while True:
-        input_semester = input(f"Enter semester number (1-{total_semesters}): ")
-        if input_semester.isdigit():
-            semester_number = int(input_semester)
-            if 1 <= semester_number <= total_semesters:
-                return semester_number
-
-        # clear screen code
-        subprocess.run('cls' if os.name == 'nt' else 'clear', shell=True)
-        print("Invalid input. Please try again.")
-
 
 def retrieve_subjects(semester: int) -> list:
     '''
@@ -44,6 +27,9 @@ def add_sub_to_list(subjects_list: list, subject_name: str) -> None:
     '''
     if subject_name not in subjects_list:
         subjects_list.append(subject_name)
+        print(f"Added: {subject_name}")
+    else:
+        print(f"Subject '{subject_name}' is already in the list.")
 
 
 def add_sub_to_list_int(subjects_list: list, subject_ind: int) -> None:
@@ -62,21 +48,11 @@ def add_sub_to_list_int(subjects_list: list, subject_ind: int) -> None:
                 return
 
             subject_name = row[0]
-            if subject_name not in subjects_list:
-                subjects_list.append(subject_name)
-            else:
-                print(f"Subject '{subject_name}' is already in the list.")
+            add_sub_to_list(subjects_list, subject_name)
 
     except sqlite3.Error as e:
         print(f"Database error: {e}")
 
-
-def remove_sub_from_list_str(subjects_list: list, subject_name: str) -> None:
-    '''
-    removes a subject from the subjects list if present
-    '''
-    if subject_name in subjects_list:
-        subjects_list.remove(subject_name)
 
 def remove_sub_from_list_int(subjects_list: list, subject_index: int) -> None:
     '''
@@ -84,47 +60,36 @@ def remove_sub_from_list_int(subjects_list: list, subject_index: int) -> None:
     '''
     zeroIndexed = subject_index - 1
     if 0 <= zeroIndexed < len(subjects_list):
-        del subjects_list[zeroIndexed]
+        removed = subjects_list.pop(zeroIndexed)
+        print(f"Removed: {removed}")
 
-def display_all_subjects(semester: int) -> int|None:
+
+def display_all_subjects() -> None:
     '''
     Displays all subjects from the database as options to the user.
-    Returns the selected subject ID as an integer.
-    Note: It will provide the names up to that semester only(not inclusive).
     '''
     print('=======================')
-    print('Choose by ID:')
+    print('Available Subjects:')
     print('=======================\n')
 
     try:
         with sqlite3.connect(subjects_database) as conn:
             cursor = conn.cursor()
 
-            cursor.execute(
-                "SELECT id, name, semester FROM subjects WHERE semester < ? ORDER BY semester",
-                (semester,)
-            )
+            cursor.execute("SELECT id, name FROM subjects ORDER BY id")
             rows = cursor.fetchall()
 
             if not rows:
-                print(f"No subjects found for semesters 1-{semester}.")
-                return None
+                print("No subjects found in database.")
+                return
 
-            # Display all subjects
             for row in rows:
-                print(f"ID: {row[0]}, Name: {row[1]}, Semester: {row[2]}")
+                print(f"ID: {row[0]:>2} | {row[1]}")
 
     except sqlite3.Error as e:
         print(f" Database error: {e}")
-        return None
-
     print()
-    input_id = input("Enter Subject ID: ")
-    if input_id.isdigit():
-        return int(input_id)
-    else:
-        print("Invalid input.")
-        return None
+
 
 def display_subs_in_list(subList: list) -> int | None:
     if not subList:
@@ -133,12 +98,10 @@ def display_subs_in_list(subList: list) -> int | None:
 
     for idx, sub in enumerate(subList):
         print(f"{idx+1}: {sub}") # because 0 is for exiting
-    val = input("Enter the index(0 for exiting): ")
+    val = input("Enter the index (0 to exit): ")
     if val.isdigit() and 0 <= int(val) <= len(subList):
-        val = int(val)
-        return val
+        return int(val)
     return None
-
 
 
 def get_section_and_course() -> tuple[str, str]:
@@ -147,18 +110,17 @@ def get_section_and_course() -> tuple[str, str]:
     returns a tuple of (section, course)
     '''
     section = input("Enter your section (e.g., A, B, C): ").strip().upper()
-    while not "A" <= section <= "G":
+    while not ("A" <= section <= "Z" or section.isdigit()):
         print("Invalid section. Defaulting to 'A'.")
         section = input("Enter your section (e.g., A, B, C): ").strip().upper()
 
-    list_of_courses = ["CS", "SE", "DS AI", "CE", "CYS"]
-    course = input("Enter your course (e.g., CS, SE, DS AI): ").strip().upper()
+    list_of_courses = ["CS", "SE", "DS AI", "CE", "CYS", "AI", "DS", "CY"]
+    course = input("Enter your course (e.g., CS, SE, DS AI, AI, CY): ").strip().upper()
     while course not in list_of_courses:
         print("Invalid course. Please enter a valid course code.")
-        course = input("Enter your course (e.g., CS, SE, DS AI): ").strip().upper()
+        course = input("Enter your course (e.g., CS, SE, DS AI, AI, CY): ").strip().upper()
 
     return (section, course)
-
 
 
 #---------------------------#
@@ -170,60 +132,48 @@ def get_section_and_course() -> tuple[str, str]:
 #---------------------------#
 
 def main_menu() -> list:
-    semester = select_semester()
     section, course = get_section_and_course()
-    print("These are the subjects that are offered in this semester: \n")
-    list_of_subs = retrieve_subjects(semester)
+    list_of_subs = []
+    
+    display_all_subjects()
+    print("Please select the subjects you are taking.")
+    print("Enter the ID of the subject to add it.")
+    print("Enter 'c' to type a custom subject name.")
+    print("Enter '0' when you are done.\n")
 
-    # showing the subjects they have now
+    while True:
+        choice = input("Enter Subject ID (0 to finish, 'c' for custom): ").strip().lower()
+        if choice == '0':
+            break
+        elif choice == 'c':
+            custom_sub = input("Enter custom subject name exactly as it appears in the timetable: ").strip()
+            if custom_sub:
+                add_sub_to_list(list_of_subs, custom_sub)
+        elif choice.isdigit():
+            add_sub_to_list_int(list_of_subs, int(choice))
+        else:
+            print("Invalid input.")
+
+    print("\nYour selected subjects:")
     for sub in list_of_subs:
-        print(sub)
+        print(f"- {sub}")
     print("\n")
 
     # taking user choice of removing any subject first
-    user_choice = input("Do you want to remove any subject???(yes or no): ")
-    if user_choice.lower().strip() == "yes":
-        print("the list of subjects you want to enter are here:")
-        print("Press 0 for exiting")
-
-        # show them all the subjects with the indices(starting from 1)
-        # 0 stops the rest
-        user_choice2 = display_subs_in_list(list_of_subs)
-
-        while user_choice2 != 0 and len(list_of_subs) > 0:
-            if user_choice2 == None:
-                print("Invalid choice")
-            elif user_choice2 == 0:
+    user_choice = input("Do you want to remove any subject? (yes or no): ").strip().lower()
+    if user_choice == "yes":
+        print("The subjects you have selected:")
+        
+        while len(list_of_subs) > 0:
+            user_choice2 = display_subs_in_list(list_of_subs)
+            if user_choice2 == 0:
                 break
+            elif user_choice2 is None:
+                print("Invalid choice")
             else:
                 remove_sub_from_list_int(list_of_subs, user_choice2)
 
-            # display the list again
-            user_choice2 = display_subs_in_list(list_of_subs)
-            print("Press 0 for exiting")
-
-    # now addition stuff
-    user_choice3 = input("Do you want to enter any prev semester courses???(yes or no) ")
-    if user_choice3.lower().strip() == "yes":
-        print("These are all the courses that are in your previous semesters")
-        print("press 0 for exiting")
-        user_choice4 = display_all_subjects(semester)
-        while user_choice4 != 0:
-            if user_choice4 == None:
-                print("Invalid Input")
-            else:
-                add_sub_to_list_int(list_of_subs, user_choice4)
-            user_choice4 = display_all_subjects(semester)
-
-    for subs in list_of_subs:
-        print(subs)
-
-    list_of_reqs = []
-    list_of_reqs.append(list_of_subs)
-    list_of_reqs.append(course)
-    list_of_reqs.append(section)
-
-    return list_of_reqs
+    return [list_of_subs, course, section]
 
 
 # Testing stuff
