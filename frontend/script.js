@@ -175,6 +175,7 @@ form.addEventListener('submit', async (e) => {
             localStorage.setItem('section', section);
 
             renderTimetable(data.timetable);
+            renderMobileView(data.timetable);
             updateStatusBar(batch, course, section, selectedSubjects, selectedNames);
             
             // Update configure button
@@ -309,3 +310,251 @@ function renderTimetable(timetableData) {
 
 // === Init ===
 loadSubjects();
+
+// ===================================================================
+// MOBILE UI — Agenda Timeline Renderer
+// ===================================================================
+
+let lastTimetableData = null; // Store for mobile re-renders
+let mobileSelectedDay = null; // null = today
+
+// Wire mobile buttons to existing desktop functionality
+document.getElementById('mobile-config-btn')?.addEventListener('click', () => modal.classList.add('active'));
+document.getElementById('mobile-settings-btn')?.addEventListener('click', () => modal.classList.add('active'));
+
+// Mobile theme toggle syncs with desktop toggle
+document.getElementById('mobile-theme-toggle')?.addEventListener('click', () => {
+    themeToggleBtn.click(); // reuse desktop toggle
+    // Sync mobile icons
+    const theme = html.getAttribute('data-theme');
+    document.querySelector('.m-sun').style.display = theme === 'dark' ? 'block' : 'none';
+    document.querySelector('.m-moon').style.display = theme === 'light' ? 'block' : 'none';
+});
+
+// Build the week strip
+function buildMobileWeekStrip() {
+    const strip = document.getElementById('mobile-week-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=Sun
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - dayOfWeek); // Sunday
+
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(startOfWeek);
+        d.setDate(startOfWeek.getDate() + i);
+        const isToday = d.toDateString() === today.toDateString();
+        const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === i);
+
+        const el = document.createElement('div');
+        el.className = 'mwd' + (isActive ? ' active' : '');
+        el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
+        el.addEventListener('click', () => {
+            mobileSelectedDay = i;
+            buildMobileWeekStrip();
+            if (lastTimetableData) renderMobileView(lastTimetableData);
+        });
+        strip.appendChild(el);
+    }
+}
+
+// Update header date text
+function updateMobileDateText() {
+    const el = document.getElementById('mobile-date-text');
+    if (!el) return;
+    const now = new Date();
+    const opts = { weekday: 'long', month: 'short', day: 'numeric' };
+    el.textContent = now.toLocaleDateString('en-US', opts);
+}
+
+// Map day index (0=Sun...6=Sat) to timetable array index (0=Mon...4=Fri)
+function dayIndexToTimetableIndex(dayIdx) {
+    // dayIdx: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    // timetable: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+    if (dayIdx >= 1 && dayIdx <= 5) return dayIdx - 1;
+    return -1; // Weekend
+}
+
+// Format time for display
+function formatTimeLabel(timeStr) {
+    const parts = timeStr.split(':');
+    let h = parseInt(parts[0], 10);
+    const m = parts[1] || '00';
+    if (h >= 1 && h <= 7) h += 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    return m === '00' ? `${h12} ${ampm}` : `${h12}:${m}`;
+}
+
+// Get current time as decimal hours
+function getCurrentDecimalTime() {
+    const now = new Date();
+    return now.getHours() + now.getMinutes() / 60;
+}
+
+// Render the mobile agenda view for the selected day
+function renderMobileView(timetableData) {
+    lastTimetableData = timetableData;
+    const timeline = document.getElementById('mobile-timeline');
+    const emptyState = document.getElementById('mobile-empty-state');
+    if (!timeline) return;
+
+    // Determine which day to show
+    const today = new Date();
+    const selectedDayIdx = mobileSelectedDay === null ? today.getDay() : mobileSelectedDay;
+    const ttIdx = dayIndexToTimetableIndex(selectedDayIdx);
+
+    // Clear previous content but keep empty state element
+    timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later').forEach(el => el.remove());
+
+    if (ttIdx === -1 || !timetableData[ttIdx] || timetableData[ttIdx].length === 0) {
+        emptyState.style.display = 'block';
+        emptyState.querySelector('h2').textContent = 'No classes';
+        emptyState.querySelector('p').textContent = ttIdx === -1 ? 'Enjoy your weekend!' : 'No classes scheduled for this day.';
+        return;
+    }
+
+    emptyState.style.display = 'none';
+    const classes = [...timetableData[ttIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
+    const nowDecimal = getCurrentDecimalTime();
+    const isViewingToday = (mobileSelectedDay === null || mobileSelectedDay === today.getDay());
+
+    // Categorize classes
+    const past = [];
+    let current = null;
+    let upcoming = null;
+    const later = [];
+
+    classes.forEach(cls => {
+        const start = parseTime(cls.start_time);
+        const end = parseTime(cls.end_time);
+
+        if (!isViewingToday) {
+            // When viewing another day, everything is "later" (no past/current logic)
+            later.push(cls);
+        } else if (end <= nowDecimal) {
+            past.push(cls);
+        } else if (start <= nowDecimal && end > nowDecimal) {
+            current = cls;
+        } else if (!current && !upcoming && start > nowDecimal) {
+            // If nothing is current, the first future class is "upcoming"
+            upcoming = cls;
+        } else if (upcoming && start > nowDecimal) {
+            later.push(cls);
+        } else if (!upcoming) {
+            upcoming = cls;
+        } else {
+            later.push(cls);
+        }
+    });
+
+    // If no current class but we have an upcoming, promote first upcoming
+    if (!current && !upcoming && later.length > 0) {
+        upcoming = later.shift();
+    }
+
+    const checkSvg = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+    const capSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></svg>';
+
+    // Render PAST
+    past.forEach(cls => {
+        const el = document.createElement('div');
+        el.className = 'm-past';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(cls.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-past-check">${checkSvg}</div>
+            <div class="m-past-info">
+                <div class="m-past-subject">${cls.subject}</div>
+                <div class="m-past-loc">${cls.location}</div>
+            </div>
+            <div class="m-past-time">${cls.start_time} – ${cls.end_time}</div>
+        `;
+        timeline.appendChild(el);
+    });
+
+    // Render NOW divider (only if viewing today and there are past classes or a current class)
+    if (isViewingToday && (past.length > 0 || current)) {
+        const nowDiv = document.createElement('div');
+        nowDiv.className = 'm-now-divider';
+        const h = today.getHours();
+        const m = today.getMinutes().toString().padStart(2, '0');
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+        nowDiv.innerHTML = `<span class="m-now-label">Now · ${h12}:${m} ${ampm}</span>`;
+        timeline.appendChild(nowDiv);
+    }
+
+    // Render CURRENT (Hero Card)
+    if (current) {
+        const start = parseTime(current.start_time);
+        const end = parseTime(current.end_time);
+        const progress = Math.min(100, Math.max(0, ((nowDecimal - start) / (end - start)) * 100));
+
+        const el = document.createElement('div');
+        el.className = 'm-hero-wrap';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(current.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-hero-card">
+                <div class="m-hero-badge">${capSvg} Current</div>
+                <div class="m-hero-subject-row">
+                    <span class="m-pulse-dot"></span>
+                    <span class="m-hero-subject">${current.subject}</span>
+                </div>
+                <div class="m-hero-section">${lastConfig ? lastConfig.course + '-' + lastConfig.section : ''}</div>
+                <div class="m-hero-times">
+                    <span>${current.start_time}</span>
+                    <span>${current.end_time}</span>
+                </div>
+                <div class="m-hero-loc">Location: <strong>${current.location}</strong></div>
+                <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
+            </div>
+        `;
+        timeline.appendChild(el);
+    }
+
+    // Render UPCOMING (Clean Card)
+    if (upcoming) {
+        const el = document.createElement('div');
+        el.className = 'm-up-wrap';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(upcoming.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-up-card">
+                <div class="m-up-badge">Upcoming</div>
+                <div class="m-up-time">${upcoming.start_time} – ${upcoming.end_time}</div>
+                <div class="m-up-subject">${upcoming.subject}</div>
+                <div class="m-up-detail">${upcoming.location}</div>
+            </div>
+        `;
+        timeline.appendChild(el);
+    }
+
+    // Render LATER (Text only)
+    later.forEach(cls => {
+        const el = document.createElement('div');
+        el.className = 'm-later';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(cls.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-later-time">${cls.start_time} – ${cls.end_time}</div>
+            <div class="m-later-subject">${cls.subject}</div>
+            <div class="m-later-loc">${cls.location}</div>
+        `;
+        timeline.appendChild(el);
+    });
+}
+
+// Init mobile UI
+buildMobileWeekStrip();
+updateMobileDateText();
+
+// Refresh mobile view every minute to keep current/upcoming accurate
+setInterval(() => {
+    if (lastTimetableData) renderMobileView(lastTimetableData);
+}, 60000);
