@@ -871,12 +871,12 @@ kbd {
 .mobile-empty-state {
   text-align: center;
   padding: 60px 20px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
-.mobile-empty-state svg { opacity: 0.3; margin-bottom: 16px; }
-.mobile-empty-state h2 { font-size: 1.1rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
-.mobile-empty-state p { font-size: 0.85rem; }
+.mobile-empty-state svg { opacity: 0.6; margin-bottom: 16px; color: var(--m-accent); }
+.mobile-empty-state h2 { font-size: 1.15rem; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+.mobile-empty-state p { font-size: 0.9rem; line-height: 1.4; color: var(--text-secondary); }
 
 /* Shared spine elements */
 .mtl-label {
