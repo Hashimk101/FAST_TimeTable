@@ -747,6 +747,11 @@ kbd {
   .app-footer { display: none !important; }
 
   .mobile-view { display: flex !important; flex-direction: column; min-height: 100vh; }
+  
+  /* Fix modal form overflow on small screens */
+  .form-row { flex-wrap: wrap; gap: 12px; }
+  .form-group { flex: 1 1 calc(33% - 12px); min-width: 80px; }
+  .modal-body { padding: 20px; }
 }
 
 /* Mobile View Container */
@@ -868,9 +873,17 @@ kbd {
   background: var(--m-spine);
 }
 
+.mobile-timeline.is-empty::before {
+  display: none;
+}
+
 .mobile-empty-state {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80%;
   text-align: center;
-  padding: 60px 20px;
   color: var(--text-secondary);
 }
 
