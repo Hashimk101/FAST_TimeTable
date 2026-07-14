@@ -206,6 +206,9 @@ window.addEventListener('DOMContentLoaded', () => {
     if (savedBatch) document.getElementById('batch-input').value = savedBatch;
     if (savedCourse) document.getElementById('course-input').value = savedCourse;
     if (savedSection) document.getElementById('section-input').value = savedSection;
+    
+    // Automatically open configure modal on first load
+    modal.classList.add('active');
 });
 
 // === Status Bar ===
@@ -412,12 +415,14 @@ function renderMobileView(timetableData) {
     timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later').forEach(el => el.remove());
 
     if (ttIdx === -1 || !timetableData[ttIdx] || timetableData[ttIdx].length === 0) {
+        timeline.classList.add('is-empty');
         emptyState.style.display = 'block';
         emptyState.querySelector('h2').textContent = 'No classes';
         emptyState.querySelector('p').textContent = ttIdx === -1 ? 'Enjoy your weekend!' : 'No classes scheduled for this day.';
         return;
     }
 
+    timeline.classList.remove('is-empty');
     emptyState.style.display = 'none';
     const classes = [...timetableData[ttIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
     const nowDecimal = getCurrentDecimalTime();
