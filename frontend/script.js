@@ -158,6 +158,9 @@ form.addEventListener('submit', async (e) => {
     btn.disabled = true;
     btn.style.opacity = '0.7';
 
+    // Issue #15: Show skeleton while loading
+    if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
+
     try {
         const res = await fetch('/api/timetable', {
             method: 'POST',
@@ -174,9 +177,18 @@ form.addEventListener('submit', async (e) => {
             localStorage.setItem('course', course);
             localStorage.setItem('section', section);
 
+            // Issue #4: Cache timetable for offline use
+            localStorage.setItem('cachedTimetable', JSON.stringify(data.timetable));
+            localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
+
             renderTimetable(data.timetable);
             renderMobileView(data.timetable);
             updateStatusBar(batch, course, section, selectedSubjects, selectedNames);
+            if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+
+            // Hide offline banner if shown
+            const offlineBanner = document.getElementById('offline-banner');
+            if (offlineBanner) offlineBanner.style.display = 'none';
             
             // Update configure button
             openBtn.innerHTML = `${gearSvg} ${batch}-${course}-${section}`;
@@ -188,9 +200,34 @@ form.addEventListener('submit', async (e) => {
             modal.classList.remove('active');
         } else {
             alert('Error: ' + data.message);
+            if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
-        alert('Failed to connect to API. Is app.py running?');
+        // Issue #4: Offline fallback — try loading from cache
+        const cachedTimetable = localStorage.getItem('cachedTimetable');
+        const cachedConfig = localStorage.getItem('cachedConfig');
+
+        if (cachedTimetable && cachedConfig) {
+            const timetable = JSON.parse(cachedTimetable);
+            lastConfig = JSON.parse(cachedConfig);
+
+            renderTimetable(timetable);
+            renderMobileView(timetable);
+            updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+            if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+
+            // Show offline banner
+            const offlineBanner = document.getElementById('offline-banner');
+            if (offlineBanner) offlineBanner.style.display = 'flex';
+
+            openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('week-grid').style.display = 'grid';
+            modal.classList.remove('active');
+        } else {
+            alert('Failed to connect to API and no cached schedule found.');
+            if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
+        }
     } finally {
         btn.innerHTML = 'Generate Timetable <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>';
         btn.disabled = false;
@@ -319,7 +356,7 @@ loadSubjects();
 // ===================================================================
 
 let lastTimetableData = null; // Store for mobile re-renders
-let mobileSelectedDay = null; // null = today
+let mobileSelectedDay = null; // null = today. 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 
 // Wire mobile buttons to existing desktop functionality
 document.getElementById('mobile-config-btn')?.addEventListener('click', () => modal.classList.add('active'));
@@ -328,61 +365,46 @@ document.getElementById('mobile-settings-btn')?.addEventListener('click', () => 
 // Mobile theme toggle syncs with desktop toggle
 document.getElementById('mobile-theme-toggle')?.addEventListener('click', () => {
     themeToggleBtn.click(); // reuse desktop toggle
-    // Sync mobile icons
-    const theme = html.getAttribute('data-theme');
-    document.querySelector('.m-sun').style.display = theme === 'dark' ? 'block' : 'none';
-    document.querySelector('.m-moon').style.display = theme === 'light' ? 'block' : 'none';
+    syncMobileThemeIcons();
 });
 
-// Build the week strip
-function buildMobileWeekStrip() {
-    const strip = document.getElementById('mobile-week-strip');
-    if (!strip) return;
-    strip.innerHTML = '';
-
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0=Sun
-    const startOfWeek = new Date(today);
-    startOfWeek.setDate(today.getDate() - dayOfWeek); // Sunday
-
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(startOfWeek);
-        d.setDate(startOfWeek.getDate() + i);
-        const isToday = d.toDateString() === today.toDateString();
-        const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === i);
-
-        const el = document.createElement('div');
-        el.className = 'mwd' + (isActive ? ' active' : '');
-        el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
-        el.addEventListener('click', () => {
-            mobileSelectedDay = i;
-            buildMobileWeekStrip();
-            if (lastTimetableData) renderMobileView(lastTimetableData);
-        });
-        strip.appendChild(el);
-    }
+function syncMobileThemeIcons() {
+    const theme = html.getAttribute('data-theme');
+    const sun = document.querySelector('.m-sun');
+    const moon = document.querySelector('.m-moon');
+    if (sun) sun.style.display = theme === 'dark' ? 'block' : 'none';
+    if (moon) moon.style.display = theme === 'light' ? 'block' : 'none';
 }
 
-// Update header date text
-function updateMobileDateText() {
-    const el = document.getElementById('mobile-date-text');
-    if (!el) return;
-    const now = new Date();
-    const opts = { weekday: 'long', month: 'short', day: 'numeric' };
-    el.textContent = now.toLocaleDateString('en-US', opts);
+// Sync icons on load
+syncMobileThemeIcons();
+
+// === Issue #1: Wire "Today" nav button ===
+document.querySelector('.mobile-nav-btn[data-day="today"]')?.addEventListener('click', () => {
+    mobileSelectedDay = null;
+    buildMobileWeekStrip();
+    updateMobileDateText();
+    if (lastTimetableData) renderMobileView(lastTimetableData);
+    document.querySelector('.mobile-timeline')?.scrollTo({ top: 0, behavior: 'smooth' });
+    // Update active state
+    document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.mobile-nav-btn[data-day="today"]')?.classList.add('active');
+});
+
+// === Issue #2: Unified 12h time format ===
+function formatTime12h(timeStr) {
+    const parts = timeStr.split(':');
+    let h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1] || '0', 10);
+    // Map ambiguous 1-7 to PM (university classes)
+    if (h >= 1 && h <= 7) h += 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    const mStr = m.toString().padStart(2, '0');
+    return `${h12}:${mStr} ${ampm}`;
 }
 
-// Map day index (0=Sun...6=Sat) to timetable array index (0=Mon...4=Fri)
-function dayIndexToTimetableIndex(dayIdx) {
-    // dayIdx: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-    // timetable: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
-    if (dayIdx >= 1 && dayIdx <= 5) return dayIdx - 1;
-    return -1; // Weekend
-}
-
-// Format time for display
+// Spine labels use shorter format (no minutes if :00)
 function formatTimeLabel(timeStr) {
     const parts = timeStr.split(':');
     let h = parseInt(parts[0], 10);
@@ -393,23 +415,188 @@ function formatTimeLabel(timeStr) {
     return m === '00' ? `${h12} ${ampm}` : `${h12}:${m}`;
 }
 
+// === Issue #3: Mon-Fri only week strip ===
+function buildMobileWeekStrip() {
+    const strip = document.getElementById('mobile-week-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+
+    const today = new Date();
+    const todayDow = today.getDay(); // 0=Sun...6=Sat
+    // Find this week's Monday
+    const monday = new Date(today);
+    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    monday.setDate(today.getDate() + offset);
+
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+    for (let i = 0; i < 5; i++) {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        const isToday = d.toDateString() === today.toDateString();
+        // mobileSelectedDay: null=today, 0=Mon...4=Fri (matches timetable indices)
+        const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === i);
+
+        const el = document.createElement('div');
+        el.className = 'mwd' + (isActive ? ' active' : '');
+        el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
+        const dayIndex = i;
+        el.addEventListener('click', () => {
+            mobileSelectedDay = dayIndex;
+            buildMobileWeekStrip();
+            updateMobileDateText(dayIndex);
+            if (lastTimetableData) renderMobileView(lastTimetableData);
+        });
+        strip.appendChild(el);
+    }
+}
+
+// === Issue #11: Dynamic header date ===
+function updateMobileDateText(selectedIdx) {
+    const el = document.getElementById('mobile-date-text');
+    if (!el) return;
+
+    const today = new Date();
+
+    if (selectedIdx === undefined || selectedIdx === null) {
+        // Show today's date
+        const todayDow = today.getDay();
+        const isWeekend = todayDow === 0 || todayDow === 6;
+        if (isWeekend || mobileSelectedDay === null) {
+            el.textContent = today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        }
+        return;
+    }
+
+    // Calculate date for the selected weekday
+    const todayDow = today.getDay();
+    const monday = new Date(today);
+    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    monday.setDate(today.getDate() + offset);
+    const selectedDate = new Date(monday);
+    selectedDate.setDate(monday.getDate() + selectedIdx);
+
+    el.textContent = selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
 // Get current time as decimal hours
 function getCurrentDecimalTime() {
     const now = new Date();
     return now.getHours() + now.getMinutes() / 60;
 }
 
-// Render the mobile agenda view for the selected day
+// === Issue #10: Swipe between days ===
+let touchStartX = 0;
+let touchStartY = 0;
+document.getElementById('mobile-timeline')?.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+}, { passive: true });
+
+document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => {
+    const deltaX = e.changedTouches[0].screenX - touchStartX;
+    const deltaY = e.changedTouches[0].screenY - touchStartY;
+
+    // Only trigger if horizontal swipe is dominant
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaY) > Math.abs(deltaX) * 0.7) return;
+
+    const today = new Date();
+    const todayDow = today.getDay();
+    // Map today to timetable index (Mon=0...Fri=4), weekend defaults to 0 (Mon)
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : 0;
+    const currentDay = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
+
+    if (deltaX < -60 && currentDay < 4) {
+        // Swipe left → next day
+        mobileSelectedDay = currentDay + 1;
+    } else if (deltaX > 60 && currentDay > 0) {
+        // Swipe right → prev day
+        mobileSelectedDay = currentDay - 1;
+    } else {
+        return; // At boundary, don't re-render
+    }
+
+    buildMobileWeekStrip();
+    updateMobileDateText(mobileSelectedDay);
+    if (lastTimetableData) renderMobileView(lastTimetableData);
+}, { passive: true });
+
+// === Issue #12: Contextual empty states ===
+function getNextClassInfo(timetableData, fromDayIdx) {
+    if (!timetableData) return null;
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    // Search from the next day onwards, wrapping around
+    for (let offset = 1; offset <= 5; offset++) {
+        const checkIdx = (fromDayIdx + offset) % 5;
+        if (timetableData[checkIdx] && timetableData[checkIdx].length > 0) {
+            const sorted = [...timetableData[checkIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
+            return {
+                subject: sorted[0].subject,
+                time: formatTime12h(sorted[0].start_time),
+                day: dayNames[checkIdx]
+            };
+        }
+    }
+    return null;
+}
+
+// === Issue #13: Subject pills on mobile ===
+function renderMobileSubjectPills() {
+    const container = document.getElementById('mobile-subject-pills');
+    if (!container || !lastConfig) return;
+    container.innerHTML = '';
+    container.style.display = 'flex';
+
+    lastConfig.names.forEach(name => {
+        const pill = document.createElement('span');
+        pill.className = 'm-subject-pill';
+        pill.textContent = name;
+        container.appendChild(pill);
+    });
+}
+
+// === Issue #15: Skeleton loading ===
+function showMobileSkeleton() {
+    const timeline = document.getElementById('mobile-timeline');
+    if (!timeline) return;
+    const empty = document.getElementById('mobile-empty-state');
+    if (empty) empty.style.display = 'none';
+    timeline.classList.remove('is-empty');
+
+    // Clear existing
+    timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later, .m-skeleton').forEach(el => el.remove());
+
+    const skeletonHTML = `
+        <div class="m-skeleton">
+            <div class="skeleton-block skeleton-hero"></div>
+            <div class="skeleton-block skeleton-card"></div>
+            <div class="skeleton-block skeleton-line"></div>
+            <div class="skeleton-block skeleton-line"></div>
+        </div>
+    `;
+    timeline.insertAdjacentHTML('beforeend', skeletonHTML);
+}
+
+function hideMobileSkeleton() {
+    document.querySelectorAll('.m-skeleton').forEach(el => el.remove());
+}
+
+// === MAIN RENDER: Mobile agenda view for the selected day ===
 function renderMobileView(timetableData) {
     lastTimetableData = timetableData;
     const timeline = document.getElementById('mobile-timeline');
     const emptyState = document.getElementById('mobile-empty-state');
     if (!timeline) return;
 
+    hideMobileSkeleton();
+
     // Determine which day to show
     const today = new Date();
-    const selectedDayIdx = mobileSelectedDay === null ? today.getDay() : mobileSelectedDay;
-    const ttIdx = dayIndexToTimetableIndex(selectedDayIdx);
+    const todayDow = today.getDay(); // 0=Sun...6=Sat
+    // Map today to timetable index: Mon=0...Fri=4, weekend=-1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+    // mobileSelectedDay is already 0=Mon...4=Fri or null (=today)
+    const ttIdx = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
 
     // Clear previous content but keep empty state element
     timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later').forEach(el => el.remove());
@@ -417,8 +604,23 @@ function renderMobileView(timetableData) {
     if (ttIdx === -1 || !timetableData[ttIdx] || timetableData[ttIdx].length === 0) {
         timeline.classList.add('is-empty');
         emptyState.style.display = 'block';
-        emptyState.querySelector('h2').textContent = 'No classes';
-        emptyState.querySelector('p').textContent = ttIdx === -1 ? 'Enjoy your weekend!' : 'No classes scheduled for this day.';
+
+        // Issue #12: Contextual empty state
+        const isWeekend = ttIdx === -1;
+        const nextInfo = getNextClassInfo(timetableData, isWeekend ? 4 : ttIdx);
+
+        if (isWeekend) {
+            emptyState.querySelector('h2').textContent = 'Enjoy your weekend!';
+            emptyState.querySelector('p').textContent = nextInfo
+                ? `Monday: ${nextInfo.subject} at ${nextInfo.time}`
+                : 'No upcoming classes found.';
+        } else {
+            const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+            emptyState.querySelector('h2').textContent = `No classes ${dayNames[ttIdx]}`;
+            emptyState.querySelector('p').textContent = nextInfo
+                ? `Next: ${nextInfo.subject} at ${nextInfo.time} ${nextInfo.day}`
+                : 'No upcoming classes this week.';
+        }
         return;
     }
 
@@ -426,7 +628,8 @@ function renderMobileView(timetableData) {
     emptyState.style.display = 'none';
     const classes = [...timetableData[ttIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
     const nowDecimal = getCurrentDecimalTime();
-    const isViewingToday = (mobileSelectedDay === null || mobileSelectedDay === today.getDay());
+    const isViewingToday = (mobileSelectedDay === null && todayTtIdx >= 0) ||
+                           (mobileSelectedDay !== null && mobileSelectedDay === todayTtIdx);
 
     // Categorize classes
     const past = [];
@@ -439,14 +642,12 @@ function renderMobileView(timetableData) {
         const end = parseTime(cls.end_time);
 
         if (!isViewingToday) {
-            // When viewing another day, everything is "later" (no past/current logic)
             later.push(cls);
         } else if (end <= nowDecimal) {
             past.push(cls);
         } else if (start <= nowDecimal && end > nowDecimal) {
             current = cls;
         } else if (!current && !upcoming && start > nowDecimal) {
-            // If nothing is current, the first future class is "upcoming"
             upcoming = cls;
         } else if (upcoming && start > nowDecimal) {
             later.push(cls);
@@ -457,7 +658,6 @@ function renderMobileView(timetableData) {
         }
     });
 
-    // If no current class but we have an upcoming, promote first upcoming
     if (!current && !upcoming && later.length > 0) {
         upcoming = later.shift();
     }
@@ -465,7 +665,7 @@ function renderMobileView(timetableData) {
     const checkSvg = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
     const capSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></svg>';
 
-    // Render PAST
+    // Render PAST (Issue #2: all times in 12h)
     past.forEach(cls => {
         const el = document.createElement('div');
         el.className = 'm-past';
@@ -477,13 +677,13 @@ function renderMobileView(timetableData) {
                 <div class="m-past-subject">${cls.subject}</div>
                 <div class="m-past-loc">${cls.location}</div>
             </div>
-            <div class="m-past-time">${cls.start_time} – ${cls.end_time}</div>
+            <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
         `;
         timeline.appendChild(el);
     });
 
-    // Render NOW divider (only if viewing today and there are past classes or a current class)
-    if (isViewingToday && (past.length > 0 || current)) {
+    // Issue #8: Always render NOW divider when viewing today
+    if (isViewingToday) {
         const nowDiv = document.createElement('div');
         nowDiv.className = 'm-now-divider';
         const h = today.getHours();
@@ -494,7 +694,7 @@ function renderMobileView(timetableData) {
         timeline.appendChild(nowDiv);
     }
 
-    // Render CURRENT (Hero Card)
+    // Render CURRENT (Hero Card) — Issue #2: 12h times
     if (current) {
         const start = parseTime(current.start_time);
         const end = parseTime(current.end_time);
@@ -513,8 +713,8 @@ function renderMobileView(timetableData) {
                 </div>
                 <div class="m-hero-section">${lastConfig ? lastConfig.course + '-' + lastConfig.section : ''}</div>
                 <div class="m-hero-times">
-                    <span>${current.start_time}</span>
-                    <span>${current.end_time}</span>
+                    <span>${formatTime12h(current.start_time)}</span>
+                    <span>${formatTime12h(current.end_time)}</span>
                 </div>
                 <div class="m-hero-loc">Location: <strong>${current.location}</strong></div>
                 <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
@@ -523,8 +723,14 @@ function renderMobileView(timetableData) {
         timeline.appendChild(el);
     }
 
-    // Render UPCOMING (Clean Card)
+    // Render UPCOMING (Clean Card) — Issue #2: 12h, Issue #6: countdown
     if (upcoming) {
+        const upStart = parseTime(upcoming.start_time);
+        const minsUntil = Math.ceil((upStart - nowDecimal) * 60);
+        const countdownHtml = (isViewingToday && minsUntil > 0 && minsUntil <= 30)
+            ? `<span class="m-up-countdown">Starts in ${minsUntil}m</span>`
+            : '';
+
         const el = document.createElement('div');
         el.className = 'm-up-wrap';
         el.innerHTML = `
@@ -532,7 +738,8 @@ function renderMobileView(timetableData) {
             <span class="mtl-dot"></span>
             <div class="m-up-card">
                 <div class="m-up-badge">Upcoming</div>
-                <div class="m-up-time">${upcoming.start_time} – ${upcoming.end_time}</div>
+                ${countdownHtml}
+                <div class="m-up-time">${formatTime12h(upcoming.start_time)} – ${formatTime12h(upcoming.end_time)}</div>
                 <div class="m-up-subject">${upcoming.subject}</div>
                 <div class="m-up-detail">${upcoming.location}</div>
             </div>
@@ -540,14 +747,14 @@ function renderMobileView(timetableData) {
         timeline.appendChild(el);
     }
 
-    // Render LATER (Text only)
+    // Render LATER (Text only) — Issue #2: 12h
     later.forEach(cls => {
         const el = document.createElement('div');
         el.className = 'm-later';
         el.innerHTML = `
             <span class="mtl-label">${formatTimeLabel(cls.start_time)}</span>
             <span class="mtl-dot"></span>
-            <div class="m-later-time">${cls.start_time} – ${cls.end_time}</div>
+            <div class="m-later-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
             <div class="m-later-subject">${cls.subject}</div>
             <div class="m-later-loc">${cls.location}</div>
         `;
@@ -562,4 +769,6 @@ updateMobileDateText();
 // Refresh mobile view every minute to keep current/upcoming accurate
 setInterval(() => {
     if (lastTimetableData) renderMobileView(lastTimetableData);
+    updateMobileDateText();
 }, 60000);
+
