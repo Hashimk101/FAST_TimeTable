@@ -15,12 +15,26 @@ themeToggleBtn.addEventListener('click', () => {
     html.setAttribute('data-theme', next);
     localStorage.setItem('theme', next);
     updateThemeIcon(next);
+    updateThemeColor(next);
 });
 
 function updateThemeIcon(theme) {
     sunIcon.style.display = theme === 'dark' ? 'block' : 'none';
     moonIcon.style.display = theme === 'light' ? 'block' : 'none';
 }
+
+// === Theme Color (address bar tint) ===
+function updateThemeColor(theme) {
+    const color = theme === 'dark' ? '#17130F' : '#FAF7F2';
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'theme-color';
+        document.head.appendChild(meta);
+    }
+    meta.content = color;
+}
+updateThemeColor(savedTheme);
 
 // === Live Clock ===
 function updateClock() {
@@ -38,18 +52,45 @@ const modal = document.getElementById('config-modal');
 const openBtn = document.getElementById('open-config-btn');
 const closeBtn = document.getElementById('close-config-btn');
 
-openBtn.addEventListener('click', () => modal.classList.add('active'));
-closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+function openModal() {
+    modal.classList.add('active');
+    // Focus trap: move focus into modal
+    const firstInput = modal.querySelector('select, input, button');
+    if (firstInput) setTimeout(() => firstInput.focus(), 200);
+}
+
+function closeModal() {
+    modal.classList.remove('active');
+    // Return focus to trigger button
+    openBtn.focus();
+}
+
+openBtn.addEventListener('click', openModal);
+closeBtn.addEventListener('click', closeModal);
 
 // Close on overlay click
 modal.addEventListener('click', (e) => {
-    if (e.target === modal) modal.classList.remove('active');
+    if (e.target === modal) closeModal();
+});
+
+// Focus trap: cycle focus within modal
+modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusable = modal.querySelectorAll('input, select, button, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
 });
 
 // Close on Escape
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.classList.contains('active')) {
-        modal.classList.remove('active');
+        closeModal();
     }
 });
 
@@ -57,9 +98,11 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
     // Don't fire shortcuts when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    // Don't hijack Ctrl/Cmd shortcuts (Ctrl+C = copy, etc.)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     
     if (e.key === 'c' || e.key === 'C') {
-        modal.classList.add('active');
+        openModal();
     }
     if (e.key === 't' || e.key === 'T') {
         themeToggleBtn.click();
@@ -86,6 +129,7 @@ async function loadSubjects() {
         if (data.status === 'success') {
             allSubjects = data.data;
             renderSubjectsList();
+            restoreSubjectSelections();
         } else {
             console.error('Failed to load subjects:', data.message);
         }
@@ -94,6 +138,18 @@ async function loadSubjects() {
         document.getElementById('subject-list').innerHTML = 
             '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.<br>Is <code>app.py</code> running?</div>';
     }
+}
+
+// === Restore Subject Selections from Cache ===
+function restoreSubjectSelections() {
+    if (!lastConfig?.subjects) return;
+    document.querySelectorAll('.subject-item input').forEach(cb => {
+        if (lastConfig.subjects.includes(cb.value)) {
+            cb.checked = true;
+            cb.closest('.subject-item').classList.add('checked');
+        }
+    });
+    updateSubjectCount();
 }
 
 function renderSubjectsList() {
@@ -160,6 +216,11 @@ form.addEventListener('submit', async (e) => {
 
     // Issue #15: Show skeleton while loading
     if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
+    // Clear subject checkbox UI for re-generation
+    document.querySelectorAll('.subject-item input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+        cb.closest('.subject-item')?.classList.remove('checked');
+    });
 
     try {
         const res = await fetch('/api/timetable', {
@@ -197,7 +258,7 @@ form.addEventListener('submit', async (e) => {
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
             
-            modal.classList.remove('active');
+            closeModal();
         } else {
             alert('Error: ' + data.message);
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
@@ -223,7 +284,7 @@ form.addEventListener('submit', async (e) => {
             openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
-            modal.classList.remove('active');
+            closeModal();
         } else {
             alert('Failed to connect to API and no cached schedule found.');
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
@@ -244,8 +305,27 @@ window.addEventListener('DOMContentLoaded', () => {
     if (savedCourse) document.getElementById('course-input').value = savedCourse;
     if (savedSection) document.getElementById('section-input').value = savedSection;
     
-    // Automatically open configure modal on first load
-    modal.classList.add('active');
+    const cachedTimetable = localStorage.getItem('cachedTimetable');
+    const cachedConfig = localStorage.getItem('cachedConfig');
+    
+    if (cachedTimetable && cachedConfig) {
+        const timetable = JSON.parse(cachedTimetable);
+        lastConfig = JSON.parse(cachedConfig);
+        
+        renderTimetable(timetable);
+        renderMobileView(timetable);
+        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+        if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+        restoreSubjectSelections();
+        
+        openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+        document.getElementById('empty-state').style.display = 'none';
+        document.getElementById('week-grid').style.display = 'grid';
+        closeModal();
+    } else {
+        // Automatically open configure modal on first load
+        openModal();
+    }
 });
 
 // === Status Bar ===
@@ -305,6 +385,15 @@ function renderTimetable(timetableData) {
     timetableData.forEach((daySchedule, idx) => {
         const col = document.createElement('div');
         col.className = 'day-column';
+        
+        const now = new Date();
+        const currentDecimal = now.getHours() + now.getMinutes() / 60;
+        const todayDow = now.getDay();
+        const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+        
+        if (idx === todayTtIdx) {
+            col.classList.add('day-column--today');
+        }
         col.innerHTML = `<div class="day-header">${days[idx]}</div>`;
         
         if (daySchedule.length === 0) {
@@ -315,7 +404,7 @@ function renderTimetable(timetableData) {
             col.appendChild(emptyMsg);
         }
         
-        daySchedule.forEach(cls => {
+        [...daySchedule].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time)).forEach(cls => {
             totalClasses++;
             if (!subjectColors[cls.subject]) {
                 subjectColors[cls.subject] = colors[colorIndex % colors.length];
@@ -328,6 +417,14 @@ function renderTimetable(timetableData) {
 
             const card = document.createElement('article');
             card.className = 'subject-card';
+            
+            if (idx === todayTtIdx) {
+                if (startVal <= currentDecimal && endVal > currentDecimal) {
+                    card.classList.add('subject-card--current');
+                } else if (startVal > currentDecimal && !col.querySelector('.subject-card--upcoming')) {
+                    card.classList.add('subject-card--upcoming');
+                }
+            }
             card.style.setProperty('--start', startVal);
             card.style.setProperty('--duration', duration);
             card.style.setProperty('--card-bg', subjectColors[cls.subject].bg);
@@ -335,7 +432,7 @@ function renderTimetable(timetableData) {
             
             card.innerHTML = `
                 <h3>${cls.subject}</h3>
-                <p class="card-time">${cls.start_time} – ${cls.end_time}</p>
+                <p class="card-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</p>
                 <p class="card-location">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                     ${cls.location}
@@ -359,8 +456,8 @@ let lastTimetableData = null; // Store for mobile re-renders
 let mobileSelectedDay = null; // null = today. 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 
 // Wire mobile buttons to existing desktop functionality
-document.getElementById('mobile-config-btn')?.addEventListener('click', () => modal.classList.add('active'));
-document.getElementById('mobile-settings-btn')?.addEventListener('click', () => modal.classList.add('active'));
+document.getElementById('mobile-config-btn')?.addEventListener('click', () => openModal());
+document.getElementById('mobile-settings-btn')?.addEventListener('click', () => openModal());
 
 // Mobile theme toggle syncs with desktop toggle
 document.getElementById('mobile-theme-toggle')?.addEventListener('click', () => {
@@ -443,9 +540,21 @@ function buildMobileWeekStrip() {
         const dayIndex = i;
         el.addEventListener('click', () => {
             mobileSelectedDay = dayIndex;
-            buildMobileWeekStrip();
-            updateMobileDateText(dayIndex);
-            if (lastTimetableData) renderMobileView(lastTimetableData);
+            const timeline = document.getElementById('mobile-timeline');
+            if (timeline) {
+                timeline.style.transition = 'opacity 0.12s ease-out';
+                timeline.style.opacity = '0';
+                setTimeout(() => {
+                    buildMobileWeekStrip();
+                    updateMobileDateText(dayIndex);
+                    if (lastTimetableData) renderMobileView(lastTimetableData);
+                    timeline.style.opacity = '1';
+                }, 120);
+            } else {
+                buildMobileWeekStrip();
+                updateMobileDateText(dayIndex);
+                if (lastTimetableData) renderMobileView(lastTimetableData);
+            }
         });
         strip.appendChild(el);
     }
@@ -516,9 +625,21 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
         return; // At boundary, don't re-render
     }
 
-    buildMobileWeekStrip();
-    updateMobileDateText(mobileSelectedDay);
-    if (lastTimetableData) renderMobileView(lastTimetableData);
+    const timeline = document.getElementById('mobile-timeline');
+    if (timeline) {
+        timeline.style.transition = 'opacity 0.12s ease-out';
+        timeline.style.opacity = '0';
+        setTimeout(() => {
+            buildMobileWeekStrip();
+            updateMobileDateText(mobileSelectedDay);
+            if (lastTimetableData) renderMobileView(lastTimetableData);
+            timeline.style.opacity = '1';
+        }, 120);
+    } else {
+        buildMobileWeekStrip();
+        updateMobileDateText(mobileSelectedDay);
+        if (lastTimetableData) renderMobileView(lastTimetableData);
+    }
 }, { passive: true });
 
 // === Issue #12: Contextual empty states ===
@@ -557,6 +678,7 @@ function renderMobileSubjectPills() {
 
 // === Issue #15: Skeleton loading ===
 function showMobileSkeleton() {
+    hideMobileSkeleton();
     const timeline = document.getElementById('mobile-timeline');
     if (!timeline) return;
     const empty = document.getElementById('mobile-empty-state');
@@ -690,7 +812,7 @@ function renderMobileView(timetableData) {
         const m = today.getMinutes().toString().padStart(2, '0');
         const ampm = h >= 12 ? 'PM' : 'AM';
         const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
-        nowDiv.innerHTML = `<span class="m-now-label">Now · ${h12}:${m} ${ampm}</span>`;
+        nowDiv.innerHTML = `<span class="m-now-label"><span class="m-now-pulse"></span>Now · ${h12}:${m} ${ampm}</span>`;
         timeline.appendChild(nowDiv);
     }
 
@@ -730,6 +852,7 @@ function renderMobileView(timetableData) {
         const countdownHtml = (isViewingToday && minsUntil > 0 && minsUntil <= 30)
             ? `<span class="m-up-countdown">Starts in ${minsUntil}m</span>`
             : '';
+        const badgeText = isViewingToday ? 'Upcoming' : 'First';
 
         const el = document.createElement('div');
         el.className = 'm-up-wrap';
@@ -737,7 +860,7 @@ function renderMobileView(timetableData) {
             <span class="mtl-label">${formatTimeLabel(upcoming.start_time)}</span>
             <span class="mtl-dot"></span>
             <div class="m-up-card">
-                <div class="m-up-badge">Upcoming</div>
+                <div class="m-up-badge">${badgeText}</div>
                 ${countdownHtml}
                 <div class="m-up-time">${formatTime12h(upcoming.start_time)} – ${formatTime12h(upcoming.end_time)}</div>
                 <div class="m-up-subject">${upcoming.subject}</div>
@@ -771,4 +894,6 @@ setInterval(() => {
     if (lastTimetableData) renderMobileView(lastTimetableData);
     updateMobileDateText();
 }, 60000);
+
+
 

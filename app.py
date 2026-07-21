@@ -1,35 +1,128 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-import sqlite3
 import os
+import re
+import time
+import logging
+from collections import defaultdict
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from databaseHandler import fetch_timetable_for_section
 
-app = Flask(__name__, static_folder='frontend', static_url_path='')
-CORS(app)
+# === Logging ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
+# === App Init ===
+app = Flask(__name__, static_folder='frontend', static_url_path='')
+
+# Request size limit: reject bodies > 1 MB
+app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024  # 1 MB
+
+# CORS: only allow API routes, not the entire app
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# === Constants ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBJECTS_DB = os.path.join(BASE_DIR, "subjects.db")
 COURSE_DB = os.path.join(BASE_DIR, "uni_timetable.db")
 LAB_DB = os.path.join(BASE_DIR, "uni_timetable_lab.db")
 
-# Route to serve the main frontend HTML
+# === Input Validation ===
+COURSE_PATTERN = re.compile(r'^[A-Za-z0-9]{1,10}$')
+SECTION_PATTERN = re.compile(r'^[A-Za-z0-9]{1,5}$')
+MAX_SUBJECTS = 20
+MAX_SUBJECT_LENGTH = 100
+
+# === Simple In-Memory Rate Limiter (no extra dependency) ===
+_rate_store = defaultdict(list)
+RATE_LIMIT = 15          # max requests
+RATE_WINDOW = 60         # per 60 seconds
+
+
+def _is_rate_limited(client_ip: str) -> bool:
+    """Returns True if the client has exceeded the rate limit."""
+    now = time.time()
+    timestamps = _rate_store[client_ip]
+    # Prune old timestamps
+    _rate_store[client_ip] = [t for t in timestamps if now - t < RATE_WINDOW]
+    if len(_rate_store[client_ip]) >= RATE_LIMIT:
+        return True
+    _rate_store[client_ip].append(now)
+    return False
+
+
+# === Security Headers ===
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'geolocation=(), camera=(), microphone=()'
+    # Only set CSP on HTML responses (not JSON API responses)
+    if response.content_type and 'text/html' in response.content_type:
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; "
+            "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "script-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'"
+        )
+    return response
+
+
+# === Error Handlers ===
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"status": "error", "message": "Bad request"}), 400
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"status": "error", "message": "Not found"}), 404
+
+
+@app.errorhandler(413)
+def payload_too_large(e):
+    return jsonify({"status": "error", "message": "Request too large"}), 413
+
+
+@app.errorhandler(429)
+def rate_limit_exceeded(e):
+    return jsonify({"status": "error", "message": "Too many requests, please slow down"}), 429
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+# === Routes ===
 @app.route('/')
 def index():
     return app.send_static_file('index.html')
 
+
 @app.route('/api/subjects', methods=['GET'])
 def get_subjects():
     """Returns a list of all subjects from the subjects.db"""
+    import sqlite3
     try:
         with sqlite3.connect(SUBJECTS_DB) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, short_name FROM subjects ORDER BY name ASC")
             rows = cursor.fetchall()
-            
+
             subjects = [{"id": row[0], "name": row[1], "short_name": row[2]} for row in rows]
             return jsonify({"status": "success", "data": subjects})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.exception("Failed to fetch subjects")
+        return jsonify({"status": "error", "message": "Failed to load subjects"}), 500
+
 
 @app.route('/api/timetable', methods=['POST'])
 def get_timetable():
@@ -37,23 +130,62 @@ def get_timetable():
     Accepts JSON like: {"course": "SE", "section": "A", "subjects": ["Civics", "OS"]}
     Returns the timetable structure.
     """
-    data = request.json
-    course = data.get('course', '').strip().upper()
-    section = data.get('section', '').strip().upper()
+    # --- Rate limiting ---
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    if client_ip:
+        client_ip = client_ip.split(',')[0].strip()
+    if _is_rate_limited(client_ip):
+        logger.warning("Rate limited: %s", client_ip)
+        return jsonify({"status": "error", "message": "Too many requests, please slow down"}), 429
+
+    # --- Parse JSON safely ---
+    data = request.get_json(silent=True)
+    if data is None:
+        return jsonify({"status": "error", "message": "Invalid or missing JSON body"}), 400
+
+    course = data.get('course', '')
+    section = data.get('section', '')
     subjects = data.get('subjects', [])
-    
-    if not course or not section or not subjects:
-        return jsonify({"status": "error", "message": "Missing course, section, or subjects"}), 400
-        
+
+    # --- Type checks ---
+    if not isinstance(course, str) or not isinstance(section, str):
+        return jsonify({"status": "error", "message": "Course and section must be strings"}), 400
+    if not isinstance(subjects, list):
+        return jsonify({"status": "error", "message": "Subjects must be a list"}), 400
+
+    course = course.strip().upper()
+    section = section.strip().upper()
+
+    # --- Validate format ---
+    if not course or not COURSE_PATTERN.match(course):
+        return jsonify({"status": "error", "message": "Invalid course format (alphanumeric, 1-10 chars)"}), 400
+    if not section or not SECTION_PATTERN.match(section):
+        return jsonify({"status": "error", "message": "Invalid section format (alphanumeric, 1-5 chars)"}), 400
+    if not subjects:
+        return jsonify({"status": "error", "message": "At least one subject is required"}), 400
+    if len(subjects) > MAX_SUBJECTS:
+        return jsonify({"status": "error", "message": f"Too many subjects (max {MAX_SUBJECTS})"}), 400
+
+    # --- Validate each subject ---
+    sanitized_subjects = []
+    for sub in subjects:
+        if not isinstance(sub, str):
+            return jsonify({"status": "error", "message": "Each subject must be a string"}), 400
+        sub = sub.strip()
+        if not sub or len(sub) > MAX_SUBJECT_LENGTH:
+            return jsonify({"status": "error", "message": f"Subject names must be 1-{MAX_SUBJECT_LENGTH} characters"}), 400
+        sanitized_subjects.append(sub)
+
     cosec = f"{course}-{section}"
-    
+
     try:
-        raw_timetable_course = fetch_timetable_for_section(COURSE_DB, cosec, subjects)
-        raw_timetable_lab = fetch_timetable_for_section(LAB_DB, cosec, subjects)
-        
+        raw_timetable_course = fetch_timetable_for_section(COURSE_DB, cosec, sanitized_subjects)
+        raw_timetable_lab = fetch_timetable_for_section(LAB_DB, cosec, sanitized_subjects)
+
         raw_timetable = []
         for i in range(5):
             merged = raw_timetable_course[i] + raw_timetable_lab[i]
+
             def parse_time(time_str):
                 try:
                     h, m = map(int, time_str.split(':'))
@@ -62,12 +194,13 @@ def get_timetable():
                     return h * 60 + m
                 except Exception:
                     return 0
+
             merged.sort(key=lambda r: parse_time(r.starttime))
             raw_timetable.append(merged)
-        
+
         # Convert objects to dicts for JSON serialization
         json_timetable = []
-        for day_idx, day_schedule in enumerate(raw_timetable):
+        for day_schedule in raw_timetable:
             day_list = []
             for entry in day_schedule:
                 day_list.append({
@@ -77,15 +210,31 @@ def get_timetable():
                     "location": entry.location
                 })
             json_timetable.append(day_list)
-            
+
+        logger.info("Timetable generated for %s (%d classes)", cosec, sum(len(d) for d in json_timetable))
+
         return jsonify({
             "status": "success",
             "course_section": cosec,
             "timetable": json_timetable
         })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        logger.exception("Failed to generate timetable for %s", cosec)
+        return jsonify({"status": "error", "message": "Failed to generate timetable"}), 500
+
 
 if __name__ == '__main__':
-    print("Starting timetable API server on http://127.0.0.1:5000")
-    app.run(debug=True, port=5000)
+    debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+    port = int(os.environ.get('PORT', 5000))
+    
+    if debug_mode:
+        logger.info("Starting timetable API server in DEV mode on http://127.0.0.1:%d", port)
+        app.run(debug=True, port=port)
+    else:
+        logger.info("Starting timetable API server in PRODUCTION WSGI mode on port %d", port)
+        try:
+            from waitress import serve
+            serve(app, host='0.0.0.0', port=port)
+        except ImportError:
+            logger.warning("waitress not installed. Falling back to Flask dev server.")
+            app.run(debug=False, port=port)
