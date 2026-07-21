@@ -80,7 +80,7 @@ modalContent?.addEventListener('touchstart', (e) => {
 }, { passive: true });
 modalContent?.addEventListener('touchend', (e) => {
     const delta = e.changedTouches[0].clientY - modalTouchStartY;
-    if (delta > 100) closeModal(); // swipe down 100px to dismiss
+    if (delta > 100 && modalTouchStartY < 150) closeModal(); // swipe down 100px to dismiss
 });
 
 // Focus trap: cycle focus within modal
