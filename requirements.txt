@@ -6,3 +6,4 @@ pandas
 openpyxl
 flask
 flask-cors
+waitress
