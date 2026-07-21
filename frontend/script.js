@@ -73,6 +73,16 @@ modal.addEventListener('click', (e) => {
     if (e.target === modal) closeModal();
 });
 
+let modalTouchStartY = 0;
+const modalContent = document.querySelector('.modal-content');
+modalContent?.addEventListener('touchstart', (e) => {
+    modalTouchStartY = e.touches[0].clientY;
+}, { passive: true });
+modalContent?.addEventListener('touchend', (e) => {
+    const delta = e.changedTouches[0].clientY - modalTouchStartY;
+    if (delta > 100) closeModal(); // swipe down 100px to dismiss
+});
+
 // Focus trap: cycle focus within modal
 modal.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
@@ -135,14 +145,25 @@ async function loadSubjects() {
         }
     } catch (e) {
         console.error('Error fetching subjects:', e);
-        document.getElementById('subject-list').innerHTML = 
-            '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.<br>Is <code>app.py</code> running?</div>';
+        if (lastConfig && lastConfig.subjects) {
+            allSubjects = lastConfig.subjects.map((s, i) => ({
+                short_name: s,
+                name: lastConfig.names?.[i] || s
+            }));
+            renderSubjectsList();
+            restoreSubjectSelections();
+            document.getElementById('subject-list').insertAdjacentHTML('afterbegin', '<div style="padding:10px;text-align:center;color:var(--text-secondary);font-size:0.8rem;background:rgba(255,0,0,0.1);margin-bottom:10px;border-radius:4px;">Offline mode. Showing cached subjects.</div>');
+        } else {
+            document.getElementById('subject-list').innerHTML = 
+                '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.</div>';
+        }
     }
 }
 
 // === Restore Subject Selections from Cache ===
 function restoreSubjectSelections() {
     if (!lastConfig?.subjects) return;
+    if (document.getElementById('config-modal').classList.contains('active')) return;
     document.querySelectorAll('.subject-item input').forEach(cb => {
         if (lastConfig.subjects.includes(cb.value)) {
             cb.checked = true;
@@ -216,11 +237,6 @@ form.addEventListener('submit', async (e) => {
 
     // Issue #15: Show skeleton while loading
     if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
-    // Clear subject checkbox UI for re-generation
-    document.querySelectorAll('.subject-item input[type="checkbox"]').forEach(cb => {
-        cb.checked = false;
-        cb.closest('.subject-item')?.classList.remove('checked');
-    });
 
     try {
         const res = await fetch('/api/timetable', {
@@ -328,6 +344,12 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+function getSubjectColor(subject) {
+    let hash = 0;
+    for (let c of subject) hash = c.charCodeAt(0) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+}
+
 // === Status Bar ===
 function updateStatusBar(batch, course, section, subjects, names) {
     const bar = document.getElementById('status-bar');
@@ -339,11 +361,11 @@ function updateStatusBar(batch, course, section, subjects, names) {
     pills.innerHTML = '';
     
     subjects.forEach((sub, i) => {
-        const colorIdx = i % colors.length;
+        const color = getSubjectColor(sub);
         const pill = document.createElement('span');
         pill.className = 'pill';
-        pill.style.setProperty('--card-bg', colors[colorIdx].bg);
-        pill.style.setProperty('--card-border', colors[colorIdx].border);
+        pill.style.setProperty('--card-bg', color.bg);
+        pill.style.setProperty('--card-border', color.border);
         pill.innerHTML = `<span class="pill-dot"></span>${names[i] || sub}`;
         pills.appendChild(pill);
     });
@@ -369,18 +391,48 @@ const colors = [
 ];
 
 // === Render Timetable ===
+function updateDesktopTimetableCurrentState() {
+    const now = new Date();
+    const currentDecimal = now.getHours() + now.getMinutes() / 60;
+    const todayDow = now.getDay();
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+
+    document.querySelectorAll('.day-column').forEach((col, idx) => {
+        if (idx === todayTtIdx) {
+            col.classList.add('day-column--today');
+            
+            // clear old states
+            col.querySelectorAll('.subject-card--current, .subject-card--upcoming').forEach(card => {
+                card.classList.remove('subject-card--current', 'subject-card--upcoming');
+            });
+            
+            let foundUpcoming = false;
+            col.querySelectorAll('.subject-card').forEach(card => {
+                const startVal = parseFloat(card.dataset.start);
+                const endVal = parseFloat(card.dataset.end);
+                
+                if (startVal <= currentDecimal && endVal > currentDecimal) {
+                    card.classList.add('subject-card--current');
+                } else if (startVal > currentDecimal && !foundUpcoming) {
+                    card.classList.add('subject-card--upcoming');
+                    foundUpcoming = true;
+                }
+            });
+        } else {
+            col.classList.remove('day-column--today');
+            col.querySelectorAll('.subject-card--current, .subject-card--upcoming').forEach(card => {
+                card.classList.remove('subject-card--current', 'subject-card--upcoming');
+            });
+        }
+    });
+}
+
 function renderTimetable(timetableData) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
     const grid = document.getElementById('week-grid');
     
     // Remove existing day columns
     document.querySelectorAll('.day-column').forEach(el => el.remove());
-
-    let colorIndex = 0;
-    const subjectColors = {};
-
-    // Count total classes for empty-day messaging
-    let totalClasses = 0;
 
     timetableData.forEach((daySchedule, idx) => {
         const col = document.createElement('div');
@@ -405,11 +457,7 @@ function renderTimetable(timetableData) {
         }
         
         [...daySchedule].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time)).forEach(cls => {
-            totalClasses++;
-            if (!subjectColors[cls.subject]) {
-                subjectColors[cls.subject] = colors[colorIndex % colors.length];
-                colorIndex++;
-            }
+            const color = getSubjectColor(cls.subject);
 
             const startVal = parseTime(cls.start_time);
             const endVal = parseTime(cls.end_time);
@@ -417,6 +465,8 @@ function renderTimetable(timetableData) {
 
             const card = document.createElement('article');
             card.className = 'subject-card';
+            card.dataset.start = startVal;
+            card.dataset.end = endVal;
             
             if (idx === todayTtIdx) {
                 if (startVal <= currentDecimal && endVal > currentDecimal) {
@@ -427,8 +477,8 @@ function renderTimetable(timetableData) {
             }
             card.style.setProperty('--start', startVal);
             card.style.setProperty('--duration', duration);
-            card.style.setProperty('--card-bg', subjectColors[cls.subject].bg);
-            card.style.setProperty('--card-border', subjectColors[cls.subject].border);
+            card.style.setProperty('--card-bg', color.bg);
+            card.style.setProperty('--card-border', color.border);
             
             card.innerHTML = `
                 <h3>${cls.subject}</h3>
@@ -537,11 +587,25 @@ function buildMobileWeekStrip() {
         const el = document.createElement('div');
         el.className = 'mwd' + (isActive ? ' active' : '');
         el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
+        
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        
         const dayIndex = i;
+        
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                el.click();
+            }
+        });
+        
         el.addEventListener('click', () => {
             mobileSelectedDay = dayIndex;
             const timeline = document.getElementById('mobile-timeline');
             if (timeline) {
+                timeline.scrollTo({ top: 0, behavior: 'smooth' });
                 timeline.style.transition = 'opacity 0.12s ease-out';
                 timeline.style.opacity = '0';
                 setTimeout(() => {
@@ -611,11 +675,14 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
 
     const today = new Date();
     const todayDow = today.getDay();
-    // Map today to timetable index (Mon=0...Fri=4), weekend defaults to 0 (Mon)
-    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : 0;
+    // Map today to timetable index (Mon=0...Fri=4), weekend defaults to -1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
     const currentDay = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
 
-    if (deltaX < -60 && currentDay < 4) {
+    if (currentDay === -1) {
+        if (deltaX < -60) mobileSelectedDay = 0; // weekend → first swipe to Monday
+        else return;
+    } else if (deltaX < -60 && currentDay < 4) {
         // Swipe left → next day
         mobileSelectedDay = currentDay + 1;
     } else if (deltaX > 60 && currentDay > 0) {
@@ -627,6 +694,7 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
 
     const timeline = document.getElementById('mobile-timeline');
     if (timeline) {
+        timeline.scrollTo({ top: 0 });
         timeline.style.transition = 'opacity 0.12s ease-out';
         timeline.style.opacity = '0';
         setTimeout(() => {
@@ -891,7 +959,10 @@ updateMobileDateText();
 
 // Refresh mobile view every minute to keep current/upcoming accurate
 setInterval(() => {
-    if (lastTimetableData) renderMobileView(lastTimetableData);
+    if (lastTimetableData) {
+        renderMobileView(lastTimetableData);
+        updateDesktopTimetableCurrentState();
+    }
     updateMobileDateText();
 }, 60000);
 
