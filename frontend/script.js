@@ -15,12 +15,26 @@ themeToggleBtn.addEventListener('click', () => {
     html.setAttribute('data-theme', next);
     localStorage.setItem('theme', next);
     updateThemeIcon(next);
+    updateThemeColor(next);
 });
 
 function updateThemeIcon(theme) {
     sunIcon.style.display = theme === 'dark' ? 'block' : 'none';
     moonIcon.style.display = theme === 'light' ? 'block' : 'none';
 }
+
+// === Theme Color (address bar tint) ===
+function updateThemeColor(theme) {
+    const color = theme === 'dark' ? '#17130F' : '#FAF7F2';
+    let meta = document.querySelector('meta[name="theme-color"]');
+    if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'theme-color';
+        document.head.appendChild(meta);
+    }
+    meta.content = color;
+}
+updateThemeColor(savedTheme);
 
 // === Live Clock ===
 function updateClock() {
@@ -38,18 +52,55 @@ const modal = document.getElementById('config-modal');
 const openBtn = document.getElementById('open-config-btn');
 const closeBtn = document.getElementById('close-config-btn');
 
-openBtn.addEventListener('click', () => modal.classList.add('active'));
-closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+function openModal() {
+    modal.classList.add('active');
+    // Focus trap: move focus into modal
+    const firstInput = modal.querySelector('select, input, button');
+    if (firstInput) setTimeout(() => firstInput.focus(), 200);
+}
+
+function closeModal() {
+    modal.classList.remove('active');
+    // Return focus to trigger button
+    openBtn.focus();
+}
+
+openBtn.addEventListener('click', openModal);
+closeBtn.addEventListener('click', closeModal);
 
 // Close on overlay click
 modal.addEventListener('click', (e) => {
-    if (e.target === modal) modal.classList.remove('active');
+    if (e.target === modal) closeModal();
+});
+
+let modalTouchStartY = 0;
+const modalContent = document.querySelector('.modal-content');
+modalContent?.addEventListener('touchstart', (e) => {
+    modalTouchStartY = e.touches[0].clientY;
+}, { passive: true });
+modalContent?.addEventListener('touchend', (e) => {
+    const delta = e.changedTouches[0].clientY - modalTouchStartY;
+    if (delta > 100 && modalTouchStartY < 150) closeModal(); // swipe down 100px to dismiss
+});
+
+// Focus trap: cycle focus within modal
+modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusable = modal.querySelectorAll('input, select, button, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
 });
 
 // Close on Escape
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && modal.classList.contains('active')) {
-        modal.classList.remove('active');
+        closeModal();
     }
 });
 
@@ -57,9 +108,11 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keydown', (e) => {
     // Don't fire shortcuts when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    // Don't hijack Ctrl/Cmd shortcuts (Ctrl+C = copy, etc.)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     
     if (e.key === 'c' || e.key === 'C') {
-        modal.classList.add('active');
+        openModal();
     }
     if (e.key === 't' || e.key === 'T') {
         themeToggleBtn.click();
@@ -86,14 +139,38 @@ async function loadSubjects() {
         if (data.status === 'success') {
             allSubjects = data.data;
             renderSubjectsList();
+            restoreSubjectSelections();
         } else {
             console.error('Failed to load subjects:', data.message);
         }
     } catch (e) {
         console.error('Error fetching subjects:', e);
-        document.getElementById('subject-list').innerHTML = 
-            '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.<br>Is <code>app.py</code> running?</div>';
+        if (lastConfig && lastConfig.subjects) {
+            allSubjects = lastConfig.subjects.map((s, i) => ({
+                short_name: s,
+                name: lastConfig.names?.[i] || s
+            }));
+            renderSubjectsList();
+            restoreSubjectSelections();
+            document.getElementById('subject-list').insertAdjacentHTML('afterbegin', '<div style="padding:10px;text-align:center;color:var(--text-secondary);font-size:0.8rem;background:rgba(255,0,0,0.1);margin-bottom:10px;border-radius:4px;">Offline mode. Showing cached subjects.</div>');
+        } else {
+            document.getElementById('subject-list').innerHTML = 
+                '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.</div>';
+        }
     }
+}
+
+// === Restore Subject Selections from Cache ===
+function restoreSubjectSelections() {
+    if (!lastConfig?.subjects) return;
+    if (document.getElementById('config-modal').classList.contains('active')) return;
+    document.querySelectorAll('.subject-item input').forEach(cb => {
+        if (lastConfig.subjects.includes(cb.value)) {
+            cb.checked = true;
+            cb.closest('.subject-item').classList.add('checked');
+        }
+    });
+    updateSubjectCount();
 }
 
 function renderSubjectsList() {
@@ -158,6 +235,9 @@ form.addEventListener('submit', async (e) => {
     btn.disabled = true;
     btn.style.opacity = '0.7';
 
+    // Issue #15: Show skeleton while loading
+    if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
+
     try {
         const res = await fetch('/api/timetable', {
             method: 'POST',
@@ -174,8 +254,18 @@ form.addEventListener('submit', async (e) => {
             localStorage.setItem('course', course);
             localStorage.setItem('section', section);
 
+            // Issue #4: Cache timetable for offline use
+            localStorage.setItem('cachedTimetable', JSON.stringify(data.timetable));
+            localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
+
             renderTimetable(data.timetable);
+            renderMobileView(data.timetable);
             updateStatusBar(batch, course, section, selectedSubjects, selectedNames);
+            if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+
+            // Hide offline banner if shown
+            const offlineBanner = document.getElementById('offline-banner');
+            if (offlineBanner) offlineBanner.style.display = 'none';
             
             // Update configure button
             openBtn.innerHTML = `${gearSvg} ${batch}-${course}-${section}`;
@@ -184,12 +274,37 @@ form.addEventListener('submit', async (e) => {
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
             
-            modal.classList.remove('active');
+            closeModal();
         } else {
             alert('Error: ' + data.message);
+            if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
-        alert('Failed to connect to API. Is app.py running?');
+        // Issue #4: Offline fallback — try loading from cache
+        const cachedTimetable = localStorage.getItem('cachedTimetable');
+        const cachedConfig = localStorage.getItem('cachedConfig');
+
+        if (cachedTimetable && cachedConfig) {
+            const timetable = JSON.parse(cachedTimetable);
+            lastConfig = JSON.parse(cachedConfig);
+
+            renderTimetable(timetable);
+            renderMobileView(timetable);
+            updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+            if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+
+            // Show offline banner
+            const offlineBanner = document.getElementById('offline-banner');
+            if (offlineBanner) offlineBanner.style.display = 'flex';
+
+            openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+            document.getElementById('empty-state').style.display = 'none';
+            document.getElementById('week-grid').style.display = 'grid';
+            closeModal();
+        } else {
+            alert('Failed to connect to API and no cached schedule found.');
+            if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
+        }
     } finally {
         btn.innerHTML = 'Generate Timetable <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>';
         btn.disabled = false;
@@ -205,7 +320,35 @@ window.addEventListener('DOMContentLoaded', () => {
     if (savedBatch) document.getElementById('batch-input').value = savedBatch;
     if (savedCourse) document.getElementById('course-input').value = savedCourse;
     if (savedSection) document.getElementById('section-input').value = savedSection;
+    
+    const cachedTimetable = localStorage.getItem('cachedTimetable');
+    const cachedConfig = localStorage.getItem('cachedConfig');
+    
+    if (cachedTimetable && cachedConfig) {
+        const timetable = JSON.parse(cachedTimetable);
+        lastConfig = JSON.parse(cachedConfig);
+        
+        renderTimetable(timetable);
+        renderMobileView(timetable);
+        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+        if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
+        restoreSubjectSelections();
+        
+        openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+        document.getElementById('empty-state').style.display = 'none';
+        document.getElementById('week-grid').style.display = 'grid';
+        closeModal();
+    } else {
+        // Automatically open configure modal on first load
+        openModal();
+    }
 });
+
+function getSubjectColor(subject) {
+    let hash = 0;
+    for (let c of subject) hash = c.charCodeAt(0) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+}
 
 // === Status Bar ===
 function updateStatusBar(batch, course, section, subjects, names) {
@@ -218,11 +361,11 @@ function updateStatusBar(batch, course, section, subjects, names) {
     pills.innerHTML = '';
     
     subjects.forEach((sub, i) => {
-        const colorIdx = i % colors.length;
+        const color = getSubjectColor(sub);
         const pill = document.createElement('span');
         pill.className = 'pill';
-        pill.style.setProperty('--card-bg', colors[colorIdx].bg);
-        pill.style.setProperty('--card-border', colors[colorIdx].border);
+        pill.style.setProperty('--card-bg', color.bg);
+        pill.style.setProperty('--card-border', color.border);
         pill.innerHTML = `<span class="pill-dot"></span>${names[i] || sub}`;
         pills.appendChild(pill);
     });
@@ -248,6 +391,42 @@ const colors = [
 ];
 
 // === Render Timetable ===
+function updateDesktopTimetableCurrentState() {
+    const now = new Date();
+    const currentDecimal = now.getHours() + now.getMinutes() / 60;
+    const todayDow = now.getDay();
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+
+    document.querySelectorAll('.day-column').forEach((col, idx) => {
+        if (idx === todayTtIdx) {
+            col.classList.add('day-column--today');
+            
+            // clear old states
+            col.querySelectorAll('.subject-card--current, .subject-card--upcoming').forEach(card => {
+                card.classList.remove('subject-card--current', 'subject-card--upcoming');
+            });
+            
+            let foundUpcoming = false;
+            col.querySelectorAll('.subject-card').forEach(card => {
+                const startVal = parseFloat(card.dataset.start);
+                const endVal = parseFloat(card.dataset.end);
+                
+                if (startVal <= currentDecimal && endVal > currentDecimal) {
+                    card.classList.add('subject-card--current');
+                } else if (startVal > currentDecimal && !foundUpcoming) {
+                    card.classList.add('subject-card--upcoming');
+                    foundUpcoming = true;
+                }
+            });
+        } else {
+            col.classList.remove('day-column--today');
+            col.querySelectorAll('.subject-card--current, .subject-card--upcoming').forEach(card => {
+                card.classList.remove('subject-card--current', 'subject-card--upcoming');
+            });
+        }
+    });
+}
+
 function renderTimetable(timetableData) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
     const grid = document.getElementById('week-grid');
@@ -255,15 +434,18 @@ function renderTimetable(timetableData) {
     // Remove existing day columns
     document.querySelectorAll('.day-column').forEach(el => el.remove());
 
-    let colorIndex = 0;
-    const subjectColors = {};
-
-    // Count total classes for empty-day messaging
-    let totalClasses = 0;
-
     timetableData.forEach((daySchedule, idx) => {
         const col = document.createElement('div');
         col.className = 'day-column';
+        
+        const now = new Date();
+        const currentDecimal = now.getHours() + now.getMinutes() / 60;
+        const todayDow = now.getDay();
+        const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+        
+        if (idx === todayTtIdx) {
+            col.classList.add('day-column--today');
+        }
         col.innerHTML = `<div class="day-header">${days[idx]}</div>`;
         
         if (daySchedule.length === 0) {
@@ -274,12 +456,8 @@ function renderTimetable(timetableData) {
             col.appendChild(emptyMsg);
         }
         
-        daySchedule.forEach(cls => {
-            totalClasses++;
-            if (!subjectColors[cls.subject]) {
-                subjectColors[cls.subject] = colors[colorIndex % colors.length];
-                colorIndex++;
-            }
+        [...daySchedule].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time)).forEach(cls => {
+            const color = getSubjectColor(cls.subject);
 
             const startVal = parseTime(cls.start_time);
             const endVal = parseTime(cls.end_time);
@@ -287,14 +465,24 @@ function renderTimetable(timetableData) {
 
             const card = document.createElement('article');
             card.className = 'subject-card';
+            card.dataset.start = startVal;
+            card.dataset.end = endVal;
+            
+            if (idx === todayTtIdx) {
+                if (startVal <= currentDecimal && endVal > currentDecimal) {
+                    card.classList.add('subject-card--current');
+                } else if (startVal > currentDecimal && !col.querySelector('.subject-card--upcoming')) {
+                    card.classList.add('subject-card--upcoming');
+                }
+            }
             card.style.setProperty('--start', startVal);
             card.style.setProperty('--duration', duration);
-            card.style.setProperty('--card-bg', subjectColors[cls.subject].bg);
-            card.style.setProperty('--card-border', subjectColors[cls.subject].border);
+            card.style.setProperty('--card-bg', color.bg);
+            card.style.setProperty('--card-border', color.border);
             
             card.innerHTML = `
                 <h3>${cls.subject}</h3>
-                <p class="card-time">${cls.start_time} – ${cls.end_time}</p>
+                <p class="card-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</p>
                 <p class="card-location">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                     ${cls.location}
@@ -309,3 +497,474 @@ function renderTimetable(timetableData) {
 
 // === Init ===
 loadSubjects();
+
+// ===================================================================
+// MOBILE UI — Agenda Timeline Renderer
+// ===================================================================
+
+let lastTimetableData = null; // Store for mobile re-renders
+let mobileSelectedDay = null; // null = today. 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+
+// Wire mobile buttons to existing desktop functionality
+document.getElementById('mobile-config-btn')?.addEventListener('click', () => openModal());
+document.getElementById('mobile-settings-btn')?.addEventListener('click', () => openModal());
+
+// Mobile theme toggle syncs with desktop toggle
+document.getElementById('mobile-theme-toggle')?.addEventListener('click', () => {
+    themeToggleBtn.click(); // reuse desktop toggle
+    syncMobileThemeIcons();
+});
+
+function syncMobileThemeIcons() {
+    const theme = html.getAttribute('data-theme');
+    const sun = document.querySelector('.m-sun');
+    const moon = document.querySelector('.m-moon');
+    if (sun) sun.style.display = theme === 'dark' ? 'block' : 'none';
+    if (moon) moon.style.display = theme === 'light' ? 'block' : 'none';
+}
+
+// Sync icons on load
+syncMobileThemeIcons();
+
+// === Issue #1: Wire "Today" nav button ===
+document.querySelector('.mobile-nav-btn[data-day="today"]')?.addEventListener('click', () => {
+    mobileSelectedDay = null;
+    buildMobileWeekStrip();
+    updateMobileDateText();
+    if (lastTimetableData) renderMobileView(lastTimetableData);
+    document.querySelector('.mobile-timeline')?.scrollTo({ top: 0, behavior: 'smooth' });
+    // Update active state
+    document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.mobile-nav-btn[data-day="today"]')?.classList.add('active');
+});
+
+// === Issue #2: Unified 12h time format ===
+function formatTime12h(timeStr) {
+    const parts = timeStr.split(':');
+    let h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1] || '0', 10);
+    // Map ambiguous 1-7 to PM (university classes)
+    if (h >= 1 && h <= 7) h += 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    const mStr = m.toString().padStart(2, '0');
+    return `${h12}:${mStr} ${ampm}`;
+}
+
+// Spine labels use shorter format (no minutes if :00)
+function formatTimeLabel(timeStr) {
+    const parts = timeStr.split(':');
+    let h = parseInt(parts[0], 10);
+    const m = parts[1] || '00';
+    if (h >= 1 && h <= 7) h += 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+    return m === '00' ? `${h12} ${ampm}` : `${h12}:${m}`;
+}
+
+// === Issue #3: Mon-Fri only week strip ===
+function buildMobileWeekStrip() {
+    const strip = document.getElementById('mobile-week-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+
+    const today = new Date();
+    const todayDow = today.getDay(); // 0=Sun...6=Sat
+    // Find this week's Monday
+    const monday = new Date(today);
+    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    monday.setDate(today.getDate() + offset);
+
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+
+    for (let i = 0; i < 5; i++) {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        const isToday = d.toDateString() === today.toDateString();
+        // mobileSelectedDay: null=today, 0=Mon...4=Fri (matches timetable indices)
+        const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === i);
+
+        const el = document.createElement('div');
+        el.className = 'mwd' + (isActive ? ' active' : '');
+        el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
+        
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        el.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        
+        const dayIndex = i;
+        
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                el.click();
+            }
+        });
+        
+        el.addEventListener('click', () => {
+            mobileSelectedDay = dayIndex;
+            const timeline = document.getElementById('mobile-timeline');
+            if (timeline) {
+                timeline.scrollTo({ top: 0, behavior: 'smooth' });
+                timeline.style.transition = 'opacity 0.12s ease-out';
+                timeline.style.opacity = '0';
+                setTimeout(() => {
+                    buildMobileWeekStrip();
+                    updateMobileDateText(dayIndex);
+                    if (lastTimetableData) renderMobileView(lastTimetableData);
+                    timeline.style.opacity = '1';
+                }, 120);
+            } else {
+                buildMobileWeekStrip();
+                updateMobileDateText(dayIndex);
+                if (lastTimetableData) renderMobileView(lastTimetableData);
+            }
+        });
+        strip.appendChild(el);
+    }
+}
+
+// === Issue #11: Dynamic header date ===
+function updateMobileDateText(selectedIdx) {
+    const el = document.getElementById('mobile-date-text');
+    if (!el) return;
+
+    const today = new Date();
+
+    if (selectedIdx === undefined || selectedIdx === null) {
+        // Show today's date
+        const todayDow = today.getDay();
+        const isWeekend = todayDow === 0 || todayDow === 6;
+        if (isWeekend || mobileSelectedDay === null) {
+            el.textContent = today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        }
+        return;
+    }
+
+    // Calculate date for the selected weekday
+    const todayDow = today.getDay();
+    const monday = new Date(today);
+    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    monday.setDate(today.getDate() + offset);
+    const selectedDate = new Date(monday);
+    selectedDate.setDate(monday.getDate() + selectedIdx);
+
+    el.textContent = selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+// Get current time as decimal hours
+function getCurrentDecimalTime() {
+    const now = new Date();
+    return now.getHours() + now.getMinutes() / 60;
+}
+
+// === Issue #10: Swipe between days ===
+let touchStartX = 0;
+let touchStartY = 0;
+document.getElementById('mobile-timeline')?.addEventListener('touchstart', (e) => {
+    touchStartX = e.changedTouches[0].screenX;
+    touchStartY = e.changedTouches[0].screenY;
+}, { passive: true });
+
+document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => {
+    const deltaX = e.changedTouches[0].screenX - touchStartX;
+    const deltaY = e.changedTouches[0].screenY - touchStartY;
+
+    // Only trigger if horizontal swipe is dominant
+    if (Math.abs(deltaX) < 60 || Math.abs(deltaY) > Math.abs(deltaX) * 0.7) return;
+
+    const today = new Date();
+    const todayDow = today.getDay();
+    // Map today to timetable index (Mon=0...Fri=4), weekend defaults to -1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+    const currentDay = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
+
+    if (currentDay === -1) {
+        if (deltaX < -60) mobileSelectedDay = 0; // weekend → first swipe to Monday
+        else return;
+    } else if (deltaX < -60 && currentDay < 4) {
+        // Swipe left → next day
+        mobileSelectedDay = currentDay + 1;
+    } else if (deltaX > 60 && currentDay > 0) {
+        // Swipe right → prev day
+        mobileSelectedDay = currentDay - 1;
+    } else {
+        return; // At boundary, don't re-render
+    }
+
+    const timeline = document.getElementById('mobile-timeline');
+    if (timeline) {
+        timeline.scrollTo({ top: 0 });
+        timeline.style.transition = 'opacity 0.12s ease-out';
+        timeline.style.opacity = '0';
+        setTimeout(() => {
+            buildMobileWeekStrip();
+            updateMobileDateText(mobileSelectedDay);
+            if (lastTimetableData) renderMobileView(lastTimetableData);
+            timeline.style.opacity = '1';
+        }, 120);
+    } else {
+        buildMobileWeekStrip();
+        updateMobileDateText(mobileSelectedDay);
+        if (lastTimetableData) renderMobileView(lastTimetableData);
+    }
+}, { passive: true });
+
+// === Issue #12: Contextual empty states ===
+function getNextClassInfo(timetableData, fromDayIdx) {
+    if (!timetableData) return null;
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    // Search from the next day onwards, wrapping around
+    for (let offset = 1; offset <= 5; offset++) {
+        const checkIdx = (fromDayIdx + offset) % 5;
+        if (timetableData[checkIdx] && timetableData[checkIdx].length > 0) {
+            const sorted = [...timetableData[checkIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
+            return {
+                subject: sorted[0].subject,
+                time: formatTime12h(sorted[0].start_time),
+                day: dayNames[checkIdx]
+            };
+        }
+    }
+    return null;
+}
+
+// === Issue #13: Subject pills on mobile ===
+function renderMobileSubjectPills() {
+    const container = document.getElementById('mobile-subject-pills');
+    if (!container || !lastConfig) return;
+    container.innerHTML = '';
+    container.style.display = 'flex';
+
+    lastConfig.names.forEach(name => {
+        const pill = document.createElement('span');
+        pill.className = 'm-subject-pill';
+        pill.textContent = name;
+        container.appendChild(pill);
+    });
+}
+
+// === Issue #15: Skeleton loading ===
+function showMobileSkeleton() {
+    hideMobileSkeleton();
+    const timeline = document.getElementById('mobile-timeline');
+    if (!timeline) return;
+    const empty = document.getElementById('mobile-empty-state');
+    if (empty) empty.style.display = 'none';
+    timeline.classList.remove('is-empty');
+
+    // Clear existing
+    timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later, .m-skeleton').forEach(el => el.remove());
+
+    const skeletonHTML = `
+        <div class="m-skeleton">
+            <div class="skeleton-block skeleton-hero"></div>
+            <div class="skeleton-block skeleton-card"></div>
+            <div class="skeleton-block skeleton-line"></div>
+            <div class="skeleton-block skeleton-line"></div>
+        </div>
+    `;
+    timeline.insertAdjacentHTML('beforeend', skeletonHTML);
+}
+
+function hideMobileSkeleton() {
+    document.querySelectorAll('.m-skeleton').forEach(el => el.remove());
+}
+
+// === MAIN RENDER: Mobile agenda view for the selected day ===
+function renderMobileView(timetableData) {
+    lastTimetableData = timetableData;
+    const timeline = document.getElementById('mobile-timeline');
+    const emptyState = document.getElementById('mobile-empty-state');
+    if (!timeline) return;
+
+    hideMobileSkeleton();
+
+    // Determine which day to show
+    const today = new Date();
+    const todayDow = today.getDay(); // 0=Sun...6=Sat
+    // Map today to timetable index: Mon=0...Fri=4, weekend=-1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+    // mobileSelectedDay is already 0=Mon...4=Fri or null (=today)
+    const ttIdx = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
+
+    // Clear previous content but keep empty state element
+    timeline.querySelectorAll('.m-past, .m-now-divider, .m-hero-wrap, .m-up-wrap, .m-later').forEach(el => el.remove());
+
+    if (ttIdx === -1 || !timetableData[ttIdx] || timetableData[ttIdx].length === 0) {
+        timeline.classList.add('is-empty');
+        emptyState.style.display = 'block';
+
+        // Issue #12: Contextual empty state
+        const isWeekend = ttIdx === -1;
+        const nextInfo = getNextClassInfo(timetableData, isWeekend ? 4 : ttIdx);
+
+        if (isWeekend) {
+            emptyState.querySelector('h2').textContent = 'Enjoy your weekend!';
+            emptyState.querySelector('p').textContent = nextInfo
+                ? `Monday: ${nextInfo.subject} at ${nextInfo.time}`
+                : 'No upcoming classes found.';
+        } else {
+            const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+            emptyState.querySelector('h2').textContent = `No classes ${dayNames[ttIdx]}`;
+            emptyState.querySelector('p').textContent = nextInfo
+                ? `Next: ${nextInfo.subject} at ${nextInfo.time} ${nextInfo.day}`
+                : 'No upcoming classes this week.';
+        }
+        return;
+    }
+
+    timeline.classList.remove('is-empty');
+    emptyState.style.display = 'none';
+    const classes = [...timetableData[ttIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
+    const nowDecimal = getCurrentDecimalTime();
+    const isViewingToday = (mobileSelectedDay === null && todayTtIdx >= 0) ||
+                           (mobileSelectedDay !== null && mobileSelectedDay === todayTtIdx);
+
+    // Categorize classes
+    const past = [];
+    let current = null;
+    let upcoming = null;
+    const later = [];
+
+    classes.forEach(cls => {
+        const start = parseTime(cls.start_time);
+        const end = parseTime(cls.end_time);
+
+        if (!isViewingToday) {
+            later.push(cls);
+        } else if (end <= nowDecimal) {
+            past.push(cls);
+        } else if (start <= nowDecimal && end > nowDecimal) {
+            current = cls;
+        } else if (!current && !upcoming && start > nowDecimal) {
+            upcoming = cls;
+        } else if (upcoming && start > nowDecimal) {
+            later.push(cls);
+        } else if (!upcoming) {
+            upcoming = cls;
+        } else {
+            later.push(cls);
+        }
+    });
+
+    if (!current && !upcoming && later.length > 0) {
+        upcoming = later.shift();
+    }
+
+    const checkSvg = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+    const capSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></svg>';
+
+    // Render PAST (Issue #2: all times in 12h)
+    past.forEach(cls => {
+        const el = document.createElement('div');
+        el.className = 'm-past';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(cls.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-past-check">${checkSvg}</div>
+            <div class="m-past-info">
+                <div class="m-past-subject">${cls.subject}</div>
+                <div class="m-past-loc">${cls.location}</div>
+            </div>
+            <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
+        `;
+        timeline.appendChild(el);
+    });
+
+    // Issue #8: Always render NOW divider when viewing today
+    if (isViewingToday) {
+        const nowDiv = document.createElement('div');
+        nowDiv.className = 'm-now-divider';
+        const h = today.getHours();
+        const m = today.getMinutes().toString().padStart(2, '0');
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+        nowDiv.innerHTML = `<span class="m-now-label"><span class="m-now-pulse"></span>Now · ${h12}:${m} ${ampm}</span>`;
+        timeline.appendChild(nowDiv);
+    }
+
+    // Render CURRENT (Hero Card) — Issue #2: 12h times
+    if (current) {
+        const start = parseTime(current.start_time);
+        const end = parseTime(current.end_time);
+        const progress = Math.min(100, Math.max(0, ((nowDecimal - start) / (end - start)) * 100));
+
+        const el = document.createElement('div');
+        el.className = 'm-hero-wrap';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(current.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-hero-card">
+                <div class="m-hero-badge">${capSvg} Current</div>
+                <div class="m-hero-subject-row">
+                    <span class="m-pulse-dot"></span>
+                    <span class="m-hero-subject">${current.subject}</span>
+                </div>
+                <div class="m-hero-section">${lastConfig ? lastConfig.course + '-' + lastConfig.section : ''}</div>
+                <div class="m-hero-times">
+                    <span>${formatTime12h(current.start_time)}</span>
+                    <span>${formatTime12h(current.end_time)}</span>
+                </div>
+                <div class="m-hero-loc">Location: <strong>${current.location}</strong></div>
+                <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
+            </div>
+        `;
+        timeline.appendChild(el);
+    }
+
+    // Render UPCOMING (Clean Card) — Issue #2: 12h, Issue #6: countdown
+    if (upcoming) {
+        const upStart = parseTime(upcoming.start_time);
+        const minsUntil = Math.ceil((upStart - nowDecimal) * 60);
+        const countdownHtml = (isViewingToday && minsUntil > 0 && minsUntil <= 30)
+            ? `<span class="m-up-countdown">Starts in ${minsUntil}m</span>`
+            : '';
+        const badgeText = isViewingToday ? 'Upcoming' : 'First';
+
+        const el = document.createElement('div');
+        el.className = 'm-up-wrap';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(upcoming.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-up-card">
+                <div class="m-up-badge">${badgeText}</div>
+                ${countdownHtml}
+                <div class="m-up-time">${formatTime12h(upcoming.start_time)} – ${formatTime12h(upcoming.end_time)}</div>
+                <div class="m-up-subject">${upcoming.subject}</div>
+                <div class="m-up-detail">${upcoming.location}</div>
+            </div>
+        `;
+        timeline.appendChild(el);
+    }
+
+    // Render LATER (Text only) — Issue #2: 12h
+    later.forEach(cls => {
+        const el = document.createElement('div');
+        el.className = 'm-later';
+        el.innerHTML = `
+            <span class="mtl-label">${formatTimeLabel(cls.start_time)}</span>
+            <span class="mtl-dot"></span>
+            <div class="m-later-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
+            <div class="m-later-subject">${cls.subject}</div>
+            <div class="m-later-loc">${cls.location}</div>
+        `;
+        timeline.appendChild(el);
+    });
+}
+
+// Init mobile UI
+buildMobileWeekStrip();
+updateMobileDateText();
+
+// Refresh mobile view every minute to keep current/upcoming accurate
+setInterval(() => {
+    if (lastTimetableData) {
+        renderMobileView(lastTimetableData);
+        updateDesktopTimetableCurrentState();
+    }
+    updateMobileDateText();
+}, 60000);
+
+
+
