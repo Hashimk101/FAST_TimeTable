@@ -744,9 +744,9 @@ kbd {
 @media (max-width: 768px) {
   [data-theme="dark"] {
     --bg-color: #17130F;
-    --surface-color: #1E1A15;
-    --surface-hover: #342A20;
-    --border-color: #2A2620;
+    --surface-color: #28231E;
+    --surface-hover: #3A322A;
+    --border-color: #38302A;
     --text-primary: #F0EBE4;
     --text-secondary: #A89E94;
     --text-tertiary: #6A6056;
@@ -909,8 +909,8 @@ kbd {
   top: 0; bottom: 0;
   left: 56px;
   width: 1px;
-  background: var(--border-color);
-  opacity: 0.5;
+  background: var(--text-tertiary);
+  opacity: 0.35;
 }
 
 .mobile-timeline.is-empty::before {
@@ -938,8 +938,8 @@ kbd {
   color: var(--text-tertiary);
   letter-spacing: 0.02em;
   position: absolute;
-  left: -52px;
-  width: 42px;
+  left: -64px;
+  width: 44px;
   text-align: right;
 }
 
@@ -1047,7 +1047,7 @@ kbd {
   z-index: 10;
 }
 
-.m-hero-wrap .mtl-label { top: 14px; left: -44px; }
+.m-hero-wrap .mtl-label { top: 14px; }
 .m-hero-wrap .mtl-dot {
   top: 17px; left: -17px;
   width: 8px; height: 8px;
@@ -1427,6 +1427,23 @@ kbd {
   margin-right: 6px;
   vertical-align: middle;
   animation: m-blink 1.6s infinite;
+}
+
+.subject-card--current::after {
+  content: 'Now';
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--bg-color);
+  background: var(--accent);
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 0 var(--accent-subtle);
+  animation: m-pulse 2s infinite;
 }
 
 .subject-card--upcoming {
