@@ -732,7 +732,7 @@ kbd {
   --accent-pressed: #C47A64;
   --m-accent-soft: rgba(224, 145, 122, 0.12);
   --m-progress-track: rgba(224, 145, 122, 0.15);
-  --m-past-text: #5A4A3C;
+  --m-past-text: #8B7C70;
   --m-past-accent: #4A3C30;
   --m-past-check: #7A6658;
   --m-past-strike: rgba(255,255,255,0.04);
@@ -984,7 +984,7 @@ kbd {
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--m-past-text);
-  opacity: 0.45;
+  opacity: 0.60;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
