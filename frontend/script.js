@@ -647,7 +647,7 @@ function renderTimetable(timetableData) {
 }
 
 // === Init ===
-loadSubjects();
+// loadSubjects(); (Removed to prevent ReferenceError halting execution)
 
 // ===================================================================
 // MOBILE UI — Agenda Timeline Renderer

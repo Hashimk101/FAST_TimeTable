@@ -845,6 +845,11 @@ body {
   flex: 1;
 }
 
+#repeat-section-input {
+  flex: 0 0 65px;
+}
+
+
 .icon-btn.action-btn {
   background: var(--surface-hover);
   border: 1px solid var(--border-color);
