@@ -342,8 +342,9 @@ form.addEventListener('submit', async (e) => {
     const course = document.getElementById('course-input').value;
     const section = document.getElementById('section-input').value.trim().toUpperCase();
     
+    // Gather primary courses
     const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
-    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
+    const selectedSubjects = Array.from(checkboxes).map(cb => cb.dataset.name);
     const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
     
     // Convert repeatCourses for API payload
