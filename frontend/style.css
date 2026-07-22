@@ -836,16 +836,71 @@ body {
   font-size: 0.8rem;
 }
 
-.repeat-row-small {
-  display: flex;
-  gap: 8px;
+/* Repeater Dialog */
+.repeat-dialog {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--r-md);
+  padding: 16px;
+  margin-top: 12px;
 }
 
-.repeat-row-small input, .repeat-row-small button {
-  flex: 1 1 33.33%;
-  min-width: 0; /* Prevent overflowing flex container */
-  padding: 8px;
-  text-align: center;
+.repeat-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.repeat-dialog-header h4 {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.close-mini-btn {
+  font-size: 1.2rem;
+  padding: 0 4px;
+}
+
+.mini-submit-btn {
+  padding: 10px;
+  font-size: 0.85rem;
+}
+
+/* Repeat Chips */
+.repeat-chips-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.repeat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.repeat-chip .remove-chip {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.repeat-chip .remove-chip:hover {
+  color: var(--error);
 }
 
 
@@ -1023,12 +1078,40 @@ kbd {
     align-items: flex-end;
   }
   .modal-content {
-    max-height: 90vh;
-    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: 92vh;
+    border-radius: 24px 24px 0 0;
     width: 100%;
     max-width: 100%;
-    transform: translateY(30px);
+    transform: translateY(100%);
+    display: flex;
+    flex-direction: column;
   }
+  
+  .drag-handle {
+    width: 40px;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 4px;
+    margin: 12px auto 0;
+  }
+  
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  /* Make footer sticky at bottom */
+  .form-actions {
+    position: sticky;
+    bottom: -16px;
+    background: var(--bg-color);
+    padding: 16px 0;
+    margin-bottom: -16px;
+    margin-top: 12px;
+    z-index: 10;
+  }
+
   .modal-overlay.active .modal-content {
     transform: translateY(0);
   }

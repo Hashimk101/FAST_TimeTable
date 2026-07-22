@@ -277,6 +277,14 @@ function updateSubjectCount() {
 }
 
 // === Repeat Course Builder ===
+const repeatDialog = document.getElementById('repeat-dialog');
+document.getElementById('open-repeat-dialog-btn').addEventListener('click', () => {
+    repeatDialog.style.display = 'block';
+});
+document.getElementById('close-repeat-dialog').addEventListener('click', () => {
+    repeatDialog.style.display = 'none';
+});
+
 document.getElementById('add-repeat-btn').addEventListener('click', () => {
     const subjSelect = document.getElementById('repeat-subject-input');
     const cInput = document.getElementById('repeat-course-input');
@@ -297,30 +305,28 @@ document.getElementById('add-repeat-btn').addEventListener('click', () => {
     subjSelect.value = "";
     cInput.value = "";
     sInput.value = "";
+    repeatDialog.style.display = 'none';
 
     renderRepeatCourses();
 });
 
 function renderRepeatCourses() {
-    const list = document.getElementById('repeat-courses-list');
+    const list = document.getElementById('repeat-chips-container');
     if (repeatCourses.length === 0) {
-        list.innerHTML = '<div class="empty-repeat">No repeat courses added yet.</div>';
+        list.innerHTML = '';
         return;
     }
     list.innerHTML = '';
     repeatCourses.forEach((rc, index) => {
-        const div = document.createElement('div');
-        div.className = 'repeat-item';
-        div.innerHTML = `
-            <div class="repeat-item-info">
-                <strong>${rc.name}</strong>
-                <span>with ${rc.course}-${rc.section}</span>
-            </div>
-            <button type="button" class="remove-repeat-btn" onclick="removeRepeatCourse(${index})" aria-label="Remove">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        const chip = document.createElement('div');
+        chip.className = 'repeat-chip';
+        chip.innerHTML = `
+            ${rc.subject} (${rc.course}-${rc.section})
+            <button type="button" class="remove-chip" onclick="removeRepeatCourse(${index})" aria-label="Remove">
+                &times;
             </button>
         `;
-        list.appendChild(div);
+        list.appendChild(chip);
     });
 }
 
