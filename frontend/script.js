@@ -372,6 +372,7 @@ form.addEventListener('submit', async (e) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
+                batch,
                 course, 
                 section, 
                 subjects: selectedSubjects,
