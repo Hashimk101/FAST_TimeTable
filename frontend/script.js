@@ -67,6 +67,7 @@ function closeModal() {
 
 openBtn.addEventListener('click', openModal);
 closeBtn.addEventListener('click', closeModal);
+document.querySelectorAll('.empty-cta').forEach(btn => btn.addEventListener('click', openModal));
 
 // Close on overlay click
 modal.addEventListener('click', (e) => {
