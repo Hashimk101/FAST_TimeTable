@@ -521,7 +521,7 @@ body {
 
 /* Form Controls */
 .form-row { display: flex; gap: 16px; margin-bottom: 28px; }
-.form-group { flex: 1; display: flex; flex-direction: column; }
+.form-group { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .form-group > label { 
   margin-bottom: 8px; 
   font-size: 0.7rem; 
@@ -542,6 +542,8 @@ body {
 }
 
 .form-group input[type="text"], .form-group select {
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   color: var(--text-primary);

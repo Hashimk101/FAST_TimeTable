@@ -457,6 +457,8 @@ form.addEventListener('submit', async (e) => {
 
 // Load preferences on startup
 window.addEventListener('DOMContentLoaded', () => {
+    initBatches(); // Ensure batches are populated
+
     const savedBatch = localStorage.getItem('batch');
     const savedCourse = localStorage.getItem('course');
     const savedSection = localStorage.getItem('section');
@@ -473,11 +475,16 @@ window.addEventListener('DOMContentLoaded', () => {
         
         renderTimetable(timetable);
         renderMobileView(timetable);
-        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+        
+        // Use allNames / allSubs to handle repeat courses if they exist
+        const allNames = lastConfig.repeat_courses ? [...lastConfig.names, ...lastConfig.repeat_courses.map(rc => rc.name)] : lastConfig.names;
+        const allSubs = lastConfig.repeat_courses ? [...lastConfig.subjects, ...lastConfig.repeat_courses.map(rc => rc.subject)] : lastConfig.subjects;
+        
+        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, allSubs, allNames);
         if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
         restoreSubjectSelections();
         
-        openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+        openBtn.innerHTML = `${gearSvg} ${lastConfig.course}-${lastConfig.section}`;
         document.getElementById('empty-state').style.display = 'none';
         document.getElementById('week-grid').style.display = 'grid';
         closeModal();
