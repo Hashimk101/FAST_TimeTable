@@ -49,6 +49,20 @@ def is_color_similar(c1: tuple, c2: tuple, tolerance: int = 15) -> bool:
     """Checks if two RGB tuples are within a tolerance threshold."""
     return abs(c1[0] - c2[0]) <= tolerance and abs(c1[1] - c2[1]) <= tolerance and abs(c1[2] - c2[2]) <= tolerance
 
+def parse_batch_name(raw_name: str) -> str:
+    """Converts specific batches like 'BS CS (2025)' to 'BS 25', keeping disciplines out of the batch dropdown."""
+    raw_name = raw_name.strip()
+    year_match = re.search(r'\(?20(\d{2})\)?', raw_name)
+    if raw_name.startswith('BS'):
+        if year_match:
+            return f"BS {year_match.group(1)}"
+        return "BS"
+    elif raw_name.startswith('MS'):
+        if year_match:
+            return f"MS {year_match.group(1)}"
+        return "MS"
+    return raw_name
+
 def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
     """
     Reads grid data from Google Sheets API, extracts legend batch colors from rows 1-4,
@@ -96,14 +110,17 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
 
                 hex_code = rgb_to_hex(rgb)
                 
+                # Parse out discipline from batch string
+                clean_val = parse_batch_name(val)
+                
                 # Check if batch is already in list
-                if not any(b['name'] == val for b in legend_batches):
+                if not any(b['name'] == clean_val for b in legend_batches):
                     legend_batches.append({
-                        'name': val,
+                        'name': clean_val,
                         'rgb': rgb,
                         'hex': hex_code
                     })
-                    legend_color_map[rgb] = val
+                    legend_color_map[rgb] = clean_val
 
     print(f"Extracted {len(legend_batches)} batch categories from top 4 rows legend:")
     for b in legend_batches:
