@@ -248,19 +248,21 @@ def get_timetable():
     if data is None:
         return jsonify({"status": "error", "message": "Invalid or missing JSON body"}), 400
 
+    batch = data.get('batch', '')
     course = data.get('course', '')
     section = data.get('section', '')
     subjects = data.get('subjects', [])
     repeat_courses = data.get('repeat_courses', [])
 
     # --- Type checks ---
-    if not isinstance(course, str) or not isinstance(section, str):
-        return jsonify({"status": "error", "message": "Course and section must be strings"}), 400
+    if not isinstance(course, str) or not isinstance(section, str) or not isinstance(batch, str):
+        return jsonify({"status": "error", "message": "Batch, course and section must be strings"}), 400
     if not isinstance(subjects, list):
         return jsonify({"status": "error", "message": "Subjects must be a list"}), 400
     if not isinstance(repeat_courses, list):
         return jsonify({"status": "error", "message": "repeat_courses must be a list"}), 400
 
+    batch = batch.strip()
     course = course.strip().upper()
     section = section.strip().upper()
 
@@ -326,8 +328,8 @@ def get_timetable():
         raw_timetable = [[] for _ in range(5)]
 
         if sanitized_subjects:
-            primary_course = fetch_timetable_for_section(COURSE_DB, cosec, sanitized_subjects)
-            primary_lab = fetch_timetable_for_section(LAB_DB, cosec, sanitized_subjects)
+            primary_course = fetch_timetable_for_section(COURSE_DB, cosec, sanitized_subjects, batch)
+            primary_lab = fetch_timetable_for_section(LAB_DB, cosec, sanitized_subjects, batch)
             for i in range(5):
                 raw_timetable[i].extend(primary_course[i])
                 raw_timetable[i].extend(primary_lab[i])
