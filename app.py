@@ -107,21 +107,49 @@ def index():
     return app.send_static_file('index.html')
 
 
-@app.route('/api/subjects', methods=['GET'])
-def get_subjects():
-    """Returns a list of all subjects from the subjects.db"""
+@app.route('/api/batches', methods=['GET'])
+def get_batches():
+    """Returns a list of all batches and their color codes from subjects.db"""
     import sqlite3
     try:
         with sqlite3.connect(SUBJECTS_DB) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, name, short_name FROM subjects ORDER BY name ASC")
+            cursor.execute("SELECT id, name, color_hex FROM batches ORDER BY id ASC")
             rows = cursor.fetchall()
+            batches = [{"id": row[0], "name": row[1], "color_hex": row[2]} for row in rows]
+            return jsonify({"status": "success", "data": batches})
+    except Exception as e:
+        logger.exception("Failed to fetch batches")
+        return jsonify({"status": "error", "message": "Failed to load batches"}), 500
 
+
+@app.route('/api/subjects', methods=['GET'])
+def get_subjects():
+    """Returns subjects from subjects.db, optionally filtered by ?batch= parameter."""
+    import sqlite3
+    batch = request.args.get('batch', '').strip()
+    try:
+        with sqlite3.connect(SUBJECTS_DB) as conn:
+            cursor = conn.cursor()
+            if batch:
+                cursor.execute("""
+                    SELECT s.id, s.name, s.short_name 
+                    FROM subjects s
+                    JOIN batch_subjects bs ON s.id = bs.subject_id
+                    JOIN batches b ON bs.batch_id = b.id
+                    WHERE LOWER(b.name) = LOWER(?) OR LOWER(b.name) LIKE LOWER(?)
+                    ORDER BY s.name ASC
+                """, (batch, f"%{batch}%"))
+            else:
+                cursor.execute("SELECT id, name, short_name FROM subjects ORDER BY name ASC")
+            
+            rows = cursor.fetchall()
             subjects = [{"id": row[0], "name": row[1], "short_name": row[2]} for row in rows]
             return jsonify({"status": "success", "data": subjects})
     except Exception as e:
         logger.exception("Failed to fetch subjects")
         return jsonify({"status": "error", "message": "Failed to load subjects"}), 500
+
 
 
 @app.route('/api/timetable', methods=['POST'])
