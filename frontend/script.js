@@ -161,10 +161,11 @@ prevBtn.addEventListener('click', () => {
 });
 
 // Profile Selection visually
-document.querySelectorAll('.profile-card input').forEach(radio => {
-    radio.addEventListener('change', (e) => {
+document.querySelectorAll('.profile-card').forEach(card => {
+    card.addEventListener('click', (e) => {
         document.querySelectorAll('.profile-card').forEach(c => c.classList.remove('selected'));
-        e.target.closest('.profile-card').classList.add('selected');
+        card.classList.add('selected');
+        card.querySelector('input').checked = true;
     });
 });
 
