@@ -841,12 +841,11 @@ body {
   gap: 8px;
 }
 
-.repeat-row-small input {
-  flex: 1;
-}
-
-#repeat-section-input {
-  flex: 0 0 45px;
+.repeat-row-small input, .repeat-row-small button {
+  flex: 1 1 33.33%;
+  min-width: 0; /* Prevent overflowing flex container */
+  padding: 8px;
+  text-align: center;
 }
 
 
