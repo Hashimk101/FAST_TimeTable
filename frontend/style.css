@@ -466,7 +466,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--r-lg);
   width: 90%;
-  max-width: 480px;
+  max-width: 520px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -846,7 +846,7 @@ body {
 }
 
 #repeat-section-input {
-  flex: 0 0 65px;
+  flex: 0 0 45px;
 }
 
 
