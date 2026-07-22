@@ -75,6 +75,7 @@
     <!-- Configuration Modal -->
     <div class="modal-overlay" id="config-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div class="modal-content">
+            <div class="drag-handle"></div>
             <div class="modal-header">
                 <div>
                     <h2 id="modal-title">Configure Schedule</h2>
@@ -182,23 +183,35 @@
                             <!-- Repeater Builder -->
                             <div class="course-section" id="repeater-section" style="display: none;">
                                 <label>Repeat Courses</label>
-                                <div class="repeat-builder">
-                                    <div class="repeat-inputs">
+                                
+                                <button type="button" id="open-repeat-dialog-btn" class="secondary-btn add-repeat-btn">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                    Add Repeat Course
+                                </button>
+
+                                <div id="repeat-dialog" class="repeat-dialog" style="display: none;">
+                                    <div class="repeat-dialog-header">
+                                        <h4>Add Course</h4>
+                                        <button type="button" id="close-repeat-dialog" class="icon-btn close-mini-btn">&times;</button>
+                                    </div>
+                                    <div class="form-group">
                                         <select id="repeat-subject-input">
                                             <option value="" disabled selected>Select Repeat Subject</option>
                                         </select>
-                                        <div class="repeat-row-small">
-                                            <input type="text" id="repeat-course-input" placeholder="Course (e.g. CS)" maxlength="5">
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <input type="text" id="repeat-course-input" placeholder="Discipline (e.g. CS)" maxlength="5">
+                                        </div>
+                                        <div class="form-group">
                                             <input type="text" id="repeat-section-input" placeholder="Sec (e.g. B)" maxlength="3">
-                                            <button type="button" id="add-repeat-btn" class="icon-btn action-btn">
-                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                                Add
-                                            </button>
                                         </div>
                                     </div>
-                                    <div id="repeat-courses-list" class="repeat-courses-list">
-                                        <div class="empty-repeat">No repeat courses added yet.</div>
-                                    </div>
+                                    <button type="button" id="add-repeat-btn" class="submit-btn mini-submit-btn">Add to Repeats</button>
+                                </div>
+
+                                <div id="repeat-chips-container" class="repeat-chips-container">
+                                    <!-- Chips will be appended here by JS -->
                                 </div>
                             </div>
                         </div>
