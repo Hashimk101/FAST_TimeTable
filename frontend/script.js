@@ -67,6 +67,7 @@ function closeModal() {
 
 openBtn.addEventListener('click', openModal);
 closeBtn.addEventListener('click', closeModal);
+document.querySelectorAll('.empty-cta').forEach(btn => btn.addEventListener('click', openModal));
 
 // Close on overlay click
 modal.addEventListener('click', (e) => {
@@ -119,73 +120,145 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-// === Search Subjects ===
+// === Wizard Logic ===
+const step1 = document.getElementById('step-1');
+const step2 = document.getElementById('step-2');
+const nextBtn = document.getElementById('next-step-btn');
+const prevBtn = document.getElementById('prev-step-btn');
+const repeatSection = document.getElementById('repeater-section');
+
+let allSubjects = [];
+let repeatCourses = [];
+
+nextBtn.addEventListener('click', async () => {
+    const batch = document.getElementById('batch-input').value;
+    const course = document.getElementById('course-input').value;
+    const section = document.getElementById('section-input').value.trim();
+
+    if (!batch || !course || !section) {
+        alert("Please select your batch, course, and enter your section.");
+        return;
+    }
+
+    // Move to step 2
+    step1.classList.remove('active-step');
+    step1.style.display = 'none';
+    step2.style.display = 'block';
+    step2.classList.add('active-step');
+
+    // Focus trap
+    const firstInput = step2.querySelector('button, input');
+    if (firstInput) firstInput.focus();
+
+    await loadStep2Data(batch);
+});
+
+prevBtn.addEventListener('click', () => {
+    step2.classList.remove('active-step');
+    step2.style.display = 'none';
+    step1.style.display = 'block';
+    step1.classList.add('active-step');
+});
+
+// Profile Selection visually
+document.querySelectorAll('.profile-card').forEach(card => {
+    card.addEventListener('click', (e) => {
+        document.querySelectorAll('.profile-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        card.querySelector('input').checked = true;
+    });
+});
+
+// Search Subjects
 const searchInput = document.getElementById('subject-search');
 searchInput.addEventListener('input', (e) => {
     const text = e.target.value.toLowerCase();
-    document.querySelectorAll('.subject-item').forEach(item => {
+    document.querySelectorAll('#subject-list .subject-item').forEach(item => {
         const name = item.querySelector('span').innerText.toLowerCase();
         item.style.display = name.includes(text) ? 'flex' : 'none';
     });
 });
 
-// === Fetch Subjects ===
-let allSubjects = [];
-async function loadSubjects() {
+async function initBatches() {
     try {
-        const res = await fetch('/api/subjects');
+        const res = await fetch('/api/batches');
         const data = await res.json();
-        
+        const select = document.getElementById('batch-input');
+        select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
         if (data.status === 'success') {
-            allSubjects = data.data;
-            renderSubjectsList();
-            restoreSubjectSelections();
-        } else {
-            console.error('Failed to load subjects:', data.message);
+            data.data.forEach(b => {
+                if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective')) {
+                    const opt = document.createElement('option');
+                    opt.value = b.name;
+                    opt.textContent = b.name;
+                    select.appendChild(opt);
+                }
+            });
+            if (localStorage.getItem('batch')) {
+                select.value = localStorage.getItem('batch');
+            }
         }
     } catch (e) {
-        console.error('Error fetching subjects:', e);
-        if (lastConfig && lastConfig.subjects) {
-            allSubjects = lastConfig.subjects.map((s, i) => ({
-                short_name: s,
-                name: lastConfig.names?.[i] || s
-            }));
-            renderSubjectsList();
-            restoreSubjectSelections();
-            document.getElementById('subject-list').insertAdjacentHTML('afterbegin', '<div style="padding:10px;text-align:center;color:var(--text-secondary);font-size:0.8rem;background:rgba(255,0,0,0.1);margin-bottom:10px;border-radius:4px;">Offline mode. Showing cached subjects.</div>');
-        } else {
-            document.getElementById('subject-list').innerHTML = 
-                '<div style="padding:20px;text-align:center;color:var(--text-secondary);font-size:0.85rem;">Could not connect to the server.</div>';
-        }
+        console.error("Failed to load batches", e);
     }
 }
 
-// === Restore Subject Selections from Cache ===
-function restoreSubjectSelections() {
-    if (!lastConfig?.subjects) return;
-    if (document.getElementById('config-modal').classList.contains('active')) return;
-    document.querySelectorAll('.subject-item input').forEach(cb => {
-        if (lastConfig.subjects.includes(cb.value)) {
-            cb.checked = true;
-            cb.closest('.subject-item').classList.add('checked');
+async function loadStep2Data(batchName) {
+    const profile = document.querySelector('input[name="student_profile"]:checked').value;
+    const isRepeater = profile === 'repeater';
+
+    try {
+        // 1. Regular subjects
+        const regRes = await fetch(`/api/subjects?batch=${encodeURIComponent(batchName)}`);
+        const regData = await regRes.json();
+        renderSubjects(regData.data || [], 'subject-list', true);
+        
+        // 2. Electives
+        const elRes = await fetch('/api/subjects/electives');
+        const elData = await elRes.json();
+        renderSubjects(elData.data || [], 'electives-list', false);
+
+        // 3. Repeater Data
+        if (isRepeater) {
+            repeatSection.style.display = 'flex';
+            const repRes = await fetch(`/api/subjects/repeat?batch=${encodeURIComponent(batchName)}`);
+            const repData = await repRes.json();
+            const repSelect = document.getElementById('repeat-subject-input');
+            repSelect.innerHTML = '<option value="" disabled selected>Select Repeat Subject</option>';
+            (repData.data || []).forEach(sub => {
+                const opt = document.createElement('option');
+                opt.value = sub.short_name;
+                opt.dataset.name = sub.name;
+                opt.textContent = sub.name;
+                repSelect.appendChild(opt);
+            });
+            renderRepeatCourses();
+        } else {
+            repeatSection.style.display = 'none';
+            repeatCourses = []; // Clear if they switched back to regular
         }
-    });
-    updateSubjectCount();
+    } catch (e) {
+        console.error("Failed to load step 2 data", e);
+    }
 }
 
-function renderSubjectsList() {
-    const listDiv = document.getElementById('subject-list');
+function renderSubjects(subjects, containerId, precheck) {
+    const listDiv = document.getElementById(containerId);
     listDiv.innerHTML = '';
     
-    allSubjects.forEach(sub => {
+    if (subjects.length === 0) {
+        listDiv.innerHTML = '<div class="empty-repeat">No subjects found.</div>';
+        return;
+    }
+
+    subjects.forEach(sub => {
         const label = document.createElement('label');
-        label.className = 'subject-item';
+        label.className = `subject-item ${precheck ? 'checked' : ''}`;
         label.innerHTML = `
-            <input type="checkbox" value="${sub.short_name}">
+            <input type="checkbox" value="${sub.short_name}" data-name="${sub.name}" ${precheck ? 'checked' : ''}>
             <span>${sub.name}</span>
         `;
         
-        // Toggle the "checked" highlight class
         const checkbox = label.querySelector('input');
         checkbox.addEventListener('change', () => {
             label.classList.toggle('checked', checkbox.checked);
@@ -198,10 +271,70 @@ function renderSubjectsList() {
 }
 
 function updateSubjectCount() {
-    const count = document.querySelectorAll('.subject-item input[type="checkbox"]:checked').length;
+    const count = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked').length;
     const el = document.getElementById('subject-count');
-    el.textContent = count === 0 ? '0 selected' : `${count} selected`;
+    if (el) el.textContent = count === 0 ? '0 selected' : `${count} selected`;
 }
+
+// === Repeat Course Builder ===
+const repeatDialog = document.getElementById('repeat-dialog');
+document.getElementById('open-repeat-dialog-btn').addEventListener('click', () => {
+    repeatDialog.style.display = 'block';
+});
+document.getElementById('close-repeat-dialog').addEventListener('click', () => {
+    repeatDialog.style.display = 'none';
+});
+
+document.getElementById('add-repeat-btn').addEventListener('click', () => {
+    const subjSelect = document.getElementById('repeat-subject-input');
+    const cInput = document.getElementById('repeat-course-input');
+    const sInput = document.getElementById('repeat-section-input');
+
+    if (!subjSelect.value || !cInput.value.trim() || !sInput.value.trim()) {
+        alert("Please select a subject and enter course + section.");
+        return;
+    }
+
+    const shortName = subjSelect.value;
+    const subjName = subjSelect.options[subjSelect.selectedIndex].dataset.name;
+    const courseVal = cInput.value.trim().toUpperCase();
+    const sectionVal = sInput.value.trim().toUpperCase();
+
+    repeatCourses.push({ subject: shortName, name: subjName, course: courseVal, section: sectionVal });
+    
+    subjSelect.value = "";
+    cInput.value = "";
+    sInput.value = "";
+    repeatDialog.style.display = 'none';
+
+    renderRepeatCourses();
+});
+
+function renderRepeatCourses() {
+    const list = document.getElementById('repeat-chips-container');
+    if (repeatCourses.length === 0) {
+        list.innerHTML = '';
+        return;
+    }
+    list.innerHTML = '';
+    repeatCourses.forEach((rc, index) => {
+        const chip = document.createElement('div');
+        chip.className = 'repeat-chip';
+        chip.innerHTML = `
+            ${rc.subject} (${rc.course}-${rc.section})
+            <button type="button" class="remove-chip" onclick="removeRepeatCourse(${index})" aria-label="Remove">
+                &times;
+            </button>
+        `;
+        list.appendChild(chip);
+    });
+}
+
+window.removeRepeatCourse = function(index) {
+    repeatCourses.splice(index, 1);
+    renderRepeatCourses();
+};
+
 
 // === Generate Timetable ===
 const form = document.getElementById('config-form');
@@ -216,17 +349,20 @@ form.addEventListener('submit', async (e) => {
     const course = document.getElementById('course-input').value;
     const section = document.getElementById('section-input').value.trim().toUpperCase();
     
-    if (!section) {
-        alert("Please enter your section.");
-        return;
-    }
+    // Gather primary courses
+    const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
+    const selectedSubjects = Array.from(checkboxes).map(cb => cb.dataset.name);
+    const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
     
-    const checkboxes = document.querySelectorAll('.subject-item input[type="checkbox"]:checked');
-    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
-    const selectedNames = Array.from(checkboxes).map(cb => cb.parentElement.querySelector('span').innerText);
-    
-    if (selectedSubjects.length === 0) {
-        alert("Please select at least one subject.");
+    // Convert repeatCourses for API payload
+    const repeatPayload = repeatCourses.map(rc => ({
+        subject: rc.subject,
+        course: rc.course,
+        section: rc.section
+    }));
+
+    if (selectedSubjects.length === 0 && repeatPayload.length === 0) {
+        alert("Please select at least one course.");
         return;
     }
 
@@ -242,12 +378,18 @@ form.addEventListener('submit', async (e) => {
         const res = await fetch('/api/timetable', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ batch, course, section, subjects: selectedSubjects })
+            body: JSON.stringify({ 
+                batch,
+                course, 
+                section, 
+                subjects: selectedSubjects,
+                repeat_courses: repeatPayload 
+            })
         });
         const data = await res.json();
         
         if (data.status === 'success') {
-            lastConfig = { batch, course, section, subjects: selectedSubjects, names: selectedNames };
+            lastConfig = { batch, course, section, subjects: selectedSubjects, names: selectedNames, repeat_courses: repeatCourses };
             
             // Save preferences
             localStorage.setItem('batch', batch);
@@ -260,7 +402,11 @@ form.addEventListener('submit', async (e) => {
 
             renderTimetable(data.timetable);
             renderMobileView(data.timetable);
-            updateStatusBar(batch, course, section, selectedSubjects, selectedNames);
+            
+            // Combine names for status bar
+            const allNames = [...selectedNames, ...repeatCourses.map(rc => rc.name)];
+            const allSubs = [...selectedSubjects, ...repeatCourses.map(rc => rc.subject)];
+            updateStatusBar(batch, course, section, allSubs, allNames);
             if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
 
             // Hide offline banner if shown
@@ -268,19 +414,26 @@ form.addEventListener('submit', async (e) => {
             if (offlineBanner) offlineBanner.style.display = 'none';
             
             // Update configure button
-            openBtn.innerHTML = `${gearSvg} ${batch}-${course}-${section}`;
+            openBtn.innerHTML = `${gearSvg} ${course}-${section}`;
             
             // Show grid, hide empty state
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
             
             closeModal();
+            
+            // Reset wizard to step 1 for next time
+            step2.classList.remove('active-step');
+            step2.style.display = 'none';
+            step1.style.display = 'block';
+            step1.classList.add('active-step');
+            
         } else {
             alert('Error: ' + data.message);
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
-        // Issue #4: Offline fallback — try loading from cache
+        // Offline fallback
         const cachedTimetable = localStorage.getItem('cachedTimetable');
         const cachedConfig = localStorage.getItem('cachedConfig');
 
@@ -314,6 +467,8 @@ form.addEventListener('submit', async (e) => {
 
 // Load preferences on startup
 window.addEventListener('DOMContentLoaded', () => {
+    initBatches(); // Ensure batches are populated
+
     const savedBatch = localStorage.getItem('batch');
     const savedCourse = localStorage.getItem('course');
     const savedSection = localStorage.getItem('section');
@@ -330,11 +485,16 @@ window.addEventListener('DOMContentLoaded', () => {
         
         renderTimetable(timetable);
         renderMobileView(timetable);
-        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
+        
+        // Use allNames / allSubs to handle repeat courses if they exist
+        const allNames = lastConfig.repeat_courses ? [...lastConfig.names, ...lastConfig.repeat_courses.map(rc => rc.name)] : lastConfig.names;
+        const allSubs = lastConfig.repeat_courses ? [...lastConfig.subjects, ...lastConfig.repeat_courses.map(rc => rc.subject)] : lastConfig.subjects;
+        
+        updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, allSubs, allNames);
         if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
         restoreSubjectSelections();
         
-        openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+        openBtn.innerHTML = `${gearSvg} ${lastConfig.course}-${lastConfig.section}`;
         document.getElementById('empty-state').style.display = 'none';
         document.getElementById('week-grid').style.display = 'grid';
         closeModal();
@@ -496,7 +656,7 @@ function renderTimetable(timetableData) {
 }
 
 // === Init ===
-loadSubjects();
+// loadSubjects(); (Removed to prevent ReferenceError halting execution)
 
 // ===================================================================
 // MOBILE UI — Agenda Timeline Renderer

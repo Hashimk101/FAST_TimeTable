@@ -1,94 +1,88 @@
 import sqlite3
+import os
+from sheets_subject_extractor import extract_subjects_and_batches_from_api
 
-# Mapping: (Full Name, Semester, Short Name)
-subjects = [
-    # Semester 1
-    ("Applied Physics", 1, "AP"),
-    ("Calculus and Analytical Geometry", 1, "Calculus"),
-    ("Functional English", 1, "Functional English"),
-    ("Functional English - Lab", 1, "Functional English Lab"),
-    ("Ideology and Constitution of Pakistan", 1, "Ideology of Pak"),
-    ("Introduction to Information and Communication Technology", 1, "IICT Lab"),
-    ("Programming Fundamentals", 1, "PF"),
-    ("Programming Fundamentals - Lab", 1, "PF Lab"),
-    ("Understanding Holy Quran", 1, "UHQ-I"),
-    
-    # Semester 2
-    ("Civics and Community Engagement", 2, "Civics"),
-    ("Digital Logic Design", 2, "DLD"),
-    ("Digital Logic Design - Lab", 2, "DLD Lab"),
-    ("Expository Writing", 2, "Exp Writing"),
-    ("Expository Writing - Lab", 2, "Exp Writing Lab"),
-    ("Islamic Studies/Ethics", 2, "Islamic Studies"),
-    ("Multivariable Calculus", 2, "MV Calculus"),
-    ("Object Oriented Programming", 2, "OOP"),
-    ("Object Oriented Programming - Lab", 2, "OOP Lab"),
-    ("Understanding Sirat-Un-Nabi (PBUH)", 2, "Seerah & UHQ-I"),
-    
-    # Semester 3
-    ("Computer Organization and Assembly Language", 3, "COAL"),
-    ("Computer Organization and Assembly Language - Lab", 3, "COAL Lab"),
-    ("Data Structures", 3, "Data St"),
-    ("Data Structures - Lab", 3, "Data St Lab"),
-    ("Discrete Structures", 3, "Discrete"),
-    ("Linear Algebra", 3, "LA"),
-    ("Theory of Automata", 3, "Automata"),
-    
-    # Semester 4
-    ("Artificial Intelligence", 4, "AI"),
-    ("Artificial Intelligence - Lab", 4, "AI Lab"),
-    ("Database Systems", 4, "DB"),
-    ("Database Systems - Lab", 4, "DB Lab"),
-    ("Operating Systems", 4, "OS"),
-    ("Operating Systems - Lab", 4, "OS Lab"),
-    ("Pakistan Studies", 4, "Pak Studies"),
-    ("Probability and Statistics", 4, "Prob & Stats"),
-    ("Software Engineering", 4, "SE"),
-    
-    # Semester 5
-    ("Applied Human Computer Interaction", 5, "Applied HCI"),
-    ("Computer Architecture", 5, "Comp Arch"),
-    ("Computer Networks", 5, "Comp Net"),
-    ("Computer Networks - Lab", 5, "Comp Net Lab"),
-    ("Design and Analysis of Algorithms", 5, "Algo"),
-    ("Technical and Business Writing", 5, "TBW"),
-    
-    # Semester 6
-    ("Advanced DBMS", 6, "Adv DBMS"),
-    ("Compiler Construction", 6, "Comp Const"),
-    ("Parallel and Distributed Computing", 6, "PDC"),
-    
-    # Semester 7
-    ("Entrepreneurship", 7, "Entre"),
-    ("Final Year Project - I", 7, "FYP-I"),
-    
-    # Semester 8
-    ("Final Year Project - II", 8, "FYP-II"),
-    ("Information Security", 8, "Info Sec"),
-    ("Professional Practices in IT", 8, "PPIT")
-]
+DB_FILE = "subjects.db"
 
 def rebuild_subjects_db():
-    conn = sqlite3.connect('subjects.db')
+    print(f"Rebuilding {DB_FILE} from live Google Sheets API data...")
+
+    # Extract live data from Google Sheets API
+    legend_batches, unique_subjects, batch_subject_links = extract_subjects_and_batches_from_api()
+
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
-    # Recreate table
-    cursor.execute('DROP TABLE IF EXISTS subjects')
-    cursor.execute('''
+
+    # Enable foreign keys
+    cursor.execute("PRAGMA foreign_keys = ON;")
+
+    # Destroy previous database tables completely
+    cursor.execute("DROP TABLE IF EXISTS batch_subjects;")
+    cursor.execute("DROP TABLE IF EXISTS subjects;")
+    cursor.execute("DROP TABLE IF EXISTS batches;")
+
+    # 1. Create Batches Table
+    cursor.execute("""
+        CREATE TABLE batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            color_hex TEXT NOT NULL
+        );
+    """)
+
+    # 2. Create Subjects Table
+    cursor.execute("""
         CREATE TABLE subjects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            semester INTEGER NOT NULL,
+            name TEXT UNIQUE NOT NULL,
             short_name TEXT NOT NULL
-        )
-    ''')
-    
-    # Insert new subjects
-    cursor.executemany('INSERT INTO subjects (name, semester, short_name) VALUES (?, ?, ?)', subjects)
-    
+        );
+    """)
+
+    # 3. Create Batch_Subjects Mapping Table
+    cursor.execute("""
+        CREATE TABLE batch_subjects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id INTEGER NOT NULL,
+            subject_id INTEGER NOT NULL,
+            FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
+            FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+            UNIQUE(batch_id, subject_id)
+        );
+    """)
+
+    # Insert Batches in legend order
+    batch_name_to_id = {}
+    for batch in legend_batches:
+        cursor.execute("INSERT INTO batches (name, color_hex) VALUES (?, ?)", (batch['name'], batch['hex']))
+        batch_name_to_id[batch['name']] = cursor.lastrowid
+
+    # Insert Subjects
+    subject_name_to_id = {}
+    for name, short in unique_subjects.items():
+        cursor.execute("INSERT INTO subjects (name, short_name) VALUES (?, ?)", (name, short))
+        subject_name_to_id[name] = cursor.lastrowid
+
+    # Insert Batch-Subject Links
+    inserted_links = 0
+    for batch_name, subject_name in batch_subject_links:
+        batch_id = batch_name_to_id.get(batch_name)
+        subject_id = subject_name_to_id.get(subject_name)
+
+        if batch_id and subject_id:
+            try:
+                cursor.execute("INSERT OR IGNORE INTO batch_subjects (batch_id, subject_id) VALUES (?, ?)", (batch_id, subject_id))
+                inserted_links += 1
+            except sqlite3.IntegrityError:
+                pass
+
     conn.commit()
     conn.close()
-    print(f"Successfully inserted {len(subjects)} subjects into subjects.db with shorthands")
+
+    print(f"\nSuccessfully rebuilt {DB_FILE}:")
+    print(f"  - Batches: {len(batch_name_to_id)}")
+    print(f"  - Unique Subjects: {len(subject_name_to_id)}")
+    print(f"  - Batch-Subject Mappings: {inserted_links}")
 
 if __name__ == "__main__":
     rebuild_subjects_db()

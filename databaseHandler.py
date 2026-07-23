@@ -202,10 +202,22 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
     conn = sqlite3.connect(db_name)
     try:
         crsr = conn.cursor()
+        
+        # Ensure BATCH column exists
+        try:
+            crsr.execute("ALTER TABLE timetable ADD COLUMN BATCH TEXT")
+        except sqlite3.OperationalError:
+            pass # Column already exists
 
         timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
         for entry in timetable_list:
+            # Extract batch from subject if present
+            batch = None
+            match = re.search(r'\[(.*?)\]$', entry['subject'])
+            if match:
+                batch = match.group(1).strip()
+                entry['subject'] = re.sub(r'\s*\[.*?\]$', '', entry['subject']).strip()
             # Case 1: Time is in the text (like Civics 02:00-03:45)
             if check_if_time_in_subject(entry['subject']):
                 subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
@@ -230,9 +242,9 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
 
             # ... rest of the insertion code ...
             crsr.execute(f'''
-                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section']))
+                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section'], batch))
 
         conn.commit()
     finally:
@@ -256,8 +268,15 @@ def get_sheets_service():
 
 def get_raw_sheet(service, spreadsheet_id, sheet_name):
     sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=sheet_name).execute()
-    return result.get('values', [])
+    result = sheet.get(
+        spreadsheetId=spreadsheet_id, 
+        ranges=[sheet_name],
+        includeGridData=True
+    ).execute()
+    sheets = result.get('sheets', [])
+    if sheets:
+        return sheets[0].get('data', [])[0].get('rowData', [])
+    return []
 
 def read_and_clean_classroom_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
     """Read and clean classroom timetable from Google Sheets."""
@@ -286,7 +305,7 @@ class subjectEntry:
         return f"{self.starttime}-{self.endtime}: {self.subject} @ {self.location}"
 
 
-def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list) -> list:
+def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list, batch: str = None) -> list:
     # 0 to 4 -> Monday to Friday
     list_of_days_in_timetable = []
 
@@ -303,16 +322,24 @@ def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list) 
         for day in days_of_week:
             list_of_subs_per_day = []
 
-            # 1. THE INDEX (DAY, SECTION, SUBJECT) handles the WHERE clause efficiently.
-            query = f'''
-                SELECT * FROM timetable
-                WHERE DAY = ?
-                AND SECTION = ?
-                AND SUBJECT IN ({placeholders})
-            '''
-
-            # Combine parameters: Day, Section, then the list of subjects
-            params = [day, section] + list_of_subs
+            # Build query
+            if batch:
+                query = f'''
+                    SELECT * FROM timetable
+                    WHERE DAY = ?
+                    AND SECTION = ?
+                    AND SUBJECT IN ({placeholders})
+                    AND BATCH = ?
+                '''
+                params = [day, section] + list_of_subs + [batch]
+            else:
+                query = f'''
+                    SELECT * FROM timetable
+                    WHERE DAY = ?
+                    AND SECTION = ?
+                    AND SUBJECT IN ({placeholders})
+                '''
+                params = [day, section] + list_of_subs
 
             cursor.execute(query, params)
             rows = cursor.fetchall()
