@@ -150,7 +150,7 @@ nextBtn.addEventListener('click', async () => {
     const firstInput = step2.querySelector('button, input');
     if (firstInput) firstInput.focus();
 
-    await loadStep2Data(batch);
+    await loadStep2Data(batch, course);
 });
 
 prevBtn.addEventListener('click', () => {
@@ -203,13 +203,13 @@ async function initBatches() {
     }
 }
 
-async function loadStep2Data(batchName) {
+async function loadStep2Data(batchName, courseName) {
     const profile = document.querySelector('input[name="student_profile"]:checked').value;
     const isRepeater = profile === 'repeater';
 
     try {
         // 1. Regular subjects
-        const regRes = await fetch(`/api/subjects?batch=${encodeURIComponent(batchName)}`);
+        const regRes = await fetch(`/api/subjects?batch=${encodeURIComponent(batchName)}&course=${encodeURIComponent(courseName)}`);
         const regData = await regRes.json();
         renderSubjects(regData.data || [], 'subject-list', true);
         
