@@ -466,7 +466,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--r-lg);
   width: 90%;
-  max-width: 480px;
+  max-width: 520px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -521,7 +521,7 @@ body {
 
 /* Form Controls */
 .form-row { display: flex; gap: 16px; margin-bottom: 28px; }
-.form-group { flex: 1; display: flex; flex-direction: column; }
+.form-group { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .form-group > label { 
   margin-bottom: 8px; 
   font-size: 0.7rem; 
@@ -542,6 +542,8 @@ body {
 }
 
 .form-group input[type="text"], .form-group select {
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -673,6 +675,310 @@ body {
 .submit-btn:hover { background: var(--accent-hover); }
 .submit-btn:active { transform: scale(0.98); background: var(--accent-pressed, var(--accent-hover)); }
 
+.form-actions {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* === Wizard Steps & Profile Cards === */
+.wizard-step {
+  display: none;
+}
+.wizard-step.active-step {
+  display: block;
+  animation: fadeInStep 0.3s ease;
+}
+
+@keyframes fadeInStep {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24px;
+  gap: 12px;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  transition: all 0.2s;
+}
+
+.back-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.step-title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.profile-cards {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.profile-card {
+  flex: 1;
+  border: 1px solid var(--border-color);
+  border-radius: var(--r-sm);
+  padding: 14px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+  background: var(--bg-color);
+}
+
+.profile-card:hover {
+  border-color: var(--text-tertiary);
+  background: var(--surface-hover);
+}
+
+.profile-card input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.profile-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.profile-card .card-content h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.profile-card .card-content p {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* === Course Selection Step 2 === */
+.courses-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.course-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.course-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.course-section > label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Adjust subject list height for multi-section view */
+#step-2 .subject-list {
+  height: auto;
+  max-height: 180px;
+}
+
+/* Repeat Course Builder */
+.repeat-builder {
+  border: 1px dashed var(--border-color);
+  border-radius: var(--r-md);
+  padding: 12px;
+  background: var(--bg-color);
+}
+
+.repeat-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.repeat-inputs select,
+.repeat-inputs input {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 0.8rem;
+}
+
+/* Repeater Dialog */
+.repeat-dialog {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--r-md);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.repeat-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.repeat-dialog-header h4 {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.close-mini-btn {
+  font-size: 1.2rem;
+  padding: 0 4px;
+}
+
+.mini-submit-btn {
+  padding: 10px;
+  font-size: 0.85rem;
+}
+
+/* Repeat Chips */
+.repeat-chips-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.repeat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.repeat-chip .remove-chip {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.repeat-chip .remove-chip:hover {
+  color: var(--error);
+}
+
+
+.icon-btn.action-btn {
+  background: var(--surface-hover);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: var(--r-sm);
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+  height: 35px;
+}
+
+.icon-btn.action-btn:hover {
+  background: var(--accent);
+  color: var(--bg-color);
+  border-color: var(--accent);
+}
+
+.repeat-courses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty-repeat {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 12px 0;
+  font-style: italic;
+}
+
+.repeat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  font-size: 0.8rem;
+}
+
+.repeat-item-info strong {
+  color: var(--text-primary);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.repeat-item-info span {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.remove-repeat-btn {
+  background: none;
+  border: none;
+  color: #ff5e5e;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.remove-repeat-btn:hover {
+  background: rgba(255, 94, 94, 0.1);
+}
+
 /* === Footer === */
 .app-footer {
   position: fixed;
@@ -772,12 +1078,40 @@ kbd {
     align-items: flex-end;
   }
   .modal-content {
-    max-height: 90vh;
-    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: 92vh;
+    border-radius: 24px 24px 0 0;
     width: 100%;
     max-width: 100%;
-    transform: translateY(30px);
+    transform: translateY(100%);
+    display: flex;
+    flex-direction: column;
   }
+  
+  .drag-handle {
+    width: 40px;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 4px;
+    margin: 12px auto 0;
+  }
+  
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  /* Make footer sticky at bottom */
+  .form-actions {
+    position: sticky;
+    bottom: -16px;
+    background: var(--bg-color);
+    padding: 16px 0;
+    margin-bottom: -16px;
+    margin-top: 12px;
+    z-index: 10;
+  }
+
   .modal-overlay.active .modal-content {
     transform: translateY(0);
   }

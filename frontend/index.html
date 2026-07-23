@@ -48,7 +48,7 @@
             </div>
             <h2>Your schedule awaits</h2>
             <p>Click <strong>Configure</strong> to select your course, section, and subjects to generate your personalized timetable.</p>
-            <button class="empty-cta" onclick="openModal()">Configure Schedule</button>
+            <button class="empty-cta">Configure Schedule</button>
         </div>
 
         <!-- Week Grid (hidden until generated) -->
@@ -75,6 +75,7 @@
     <!-- Configuration Modal -->
     <div class="modal-overlay" id="config-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div class="modal-content">
+            <div class="drag-handle"></div>
             <div class="modal-header">
                 <div>
                     <h2 id="modal-title">Configure Schedule</h2>
@@ -86,52 +87,143 @@
             </div>
             <div class="modal-body">
                 <form id="config-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="batch-input">Batch</label>
-                            <select id="batch-input" required>
-                                <option value="25">2025</option>
-                                <option value="24">2024</option>
-                                <option value="23">2023</option>
-                                <option value="22">2022</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="course-input">Course</label>
-                            <select id="course-input" required>
-                                <option value="CS">CS</option>
-                                <option value="SE">SE</option>
-                                <option value="DS AI">DS AI</option>
-                                <option value="CE">CE</option>
-                                <option value="CYS">CYS</option>
-                                <option value="AI">AI</option>
-                                <option value="DS">DS</option>
-                                <option value="CY">CY</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="section-input">Section</label>
-                            <input type="text" id="section-input" placeholder="e.g. A" maxlength="3" required>
-                        </div>
-                    </div>
                     
-                    <div class="form-group">
-                        <label>Subjects <span class="subject-count" id="subject-count">0 selected</span></label>
-                        <div class="subject-search">
-                            <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                            <input type="text" id="subject-search" placeholder="Search subjects...">
+                    <!-- STEP 1: Profile & Section -->
+                    <div id="step-1" class="wizard-step active-step">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="batch-input">Batch</label>
+                                <select id="batch-input" required>
+                                    <option value="" disabled selected>Select Batch</option>
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="course-input">Discipline</label>
+                                <select id="course-input" required>
+                                    <option value="CS">CS</option>
+                                    <option value="SE">SE</option>
+                                    <option value="DS AI">DS AI</option>
+                                    <option value="CE">CE</option>
+                                    <option value="CYS">CYS</option>
+                                    <option value="AI">AI</option>
+                                    <option value="DS">DS</option>
+                                    <option value="CY">CY</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="section-input">Section</label>
+                                <input type="text" id="section-input" placeholder="e.g. A" maxlength="3" required>
+                            </div>
                         </div>
-                        <div class="subject-list" id="subject-list">
-                            <div class="loading">Loading subjects...</div>
+
+                        <div class="form-group">
+                            <label>Student Profile</label>
+                            <div class="profile-cards">
+                                <label class="profile-card selected">
+                                    <input type="radio" name="student_profile" value="regular" checked>
+                                    <div class="card-content">
+                                        <h4>Regular Student</h4>
+                                        <p>I take standard courses with my batch.</p>
+                                    </div>
+                                </label>
+                                <label class="profile-card">
+                                    <input type="radio" name="student_profile" value="repeater">
+                                    <div class="card-content">
+                                        <h4>Repeater / Mixed</h4>
+                                        <p>I am retaking some courses with other sections.</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="submit-btn" id="next-step-btn">
+                                Continue to Courses
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                            </button>
                         </div>
                     </div>
 
-                    <div class="form-actions">
-                        <button type="submit" class="submit-btn" id="generate-btn">
-                            Generate Timetable
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                        </button>
+                    <!-- STEP 2: Courses Selection -->
+                    <div id="step-2" class="wizard-step" style="display: none;">
+                        
+                        <div class="step-header">
+                            <button type="button" class="back-btn" id="prev-step-btn" aria-label="Go back">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                                Back
+                            </button>
+                            <span class="step-title">Select Courses</span>
+                        </div>
+
+                        <div class="courses-container">
+                            <!-- Regular Subjects -->
+                            <div class="course-section">
+                                <div class="course-section-header">
+                                    <label>Regular Courses</label>
+                                    <span class="subject-count" id="subject-count">0 selected</span>
+                                </div>
+                                <div class="subject-search">
+                                    <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                    <input type="text" id="subject-search" placeholder="Search regular courses...">
+                                </div>
+                                <div class="subject-list" id="subject-list">
+                                    <div class="loading">Loading batch courses...</div>
+                                </div>
+                            </div>
+
+                            <!-- Electives -->
+                            <div class="course-section">
+                                <label>Elective Courses</label>
+                                <div class="subject-list" id="electives-list">
+                                    <div class="loading">Loading electives...</div>
+                                </div>
+                            </div>
+
+                            <!-- Repeater Builder -->
+                            <div class="course-section" id="repeater-section" style="display: none;">
+                                <label>Repeat Courses</label>
+                                
+                                <button type="button" id="open-repeat-dialog-btn" class="secondary-btn add-repeat-btn">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                    Add Repeat Course
+                                </button>
+
+                                <div id="repeat-dialog" class="repeat-dialog" style="display: none;">
+                                    <div class="repeat-dialog-header">
+                                        <h4>Add Course</h4>
+                                        <button type="button" id="close-repeat-dialog" class="icon-btn close-mini-btn">&times;</button>
+                                    </div>
+                                    <div class="form-group">
+                                        <select id="repeat-subject-input">
+                                            <option value="" disabled selected>Select Repeat Subject</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <div class="form-group">
+                                            <input type="text" id="repeat-course-input" placeholder="Discipline (e.g. CS)" maxlength="5">
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="text" id="repeat-section-input" placeholder="Sec (e.g. B)" maxlength="3">
+                                        </div>
+                                    </div>
+                                    <button type="button" id="add-repeat-btn" class="submit-btn mini-submit-btn">Add to Repeats</button>
+                                </div>
+
+                                <div id="repeat-chips-container" class="repeat-chips-container">
+                                    <!-- Chips will be appended here by JS -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="submit-btn" id="generate-btn">
+                                Generate Timetable
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                        </div>
                     </div>
+
                 </form>
             </div>
         </div>
@@ -174,7 +266,7 @@
                 <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                 <h2>Your schedule awaits</h2>
                 <p>Tap the configure icon to select your subjects.</p>
-                <button class="empty-cta" onclick="openModal()">Configure Schedule</button>
+                <button class="empty-cta">Configure Schedule</button>
             </div>
         </div>
 
