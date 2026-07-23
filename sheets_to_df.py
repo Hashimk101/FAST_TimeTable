@@ -46,14 +46,16 @@ def _is_color_similar(c1: tuple, c2: tuple, tolerance: int = 15) -> bool:
 def _parse_batch_name(raw_name: str) -> str:
     raw_name = raw_name.strip()
     year_match = re.search(r'\(?20(\d{2})\)?', raw_name)
+    year_str = f" {year_match.group(1)}" if year_match else ""
+    
     if raw_name.startswith('BS'):
-        if year_match:
-            return f"BS {year_match.group(1)}"
-        return "BS"
+        disc = raw_name.replace('BS', '').replace(f'(20{year_match.group(1)})' if year_match else '', '').strip()
+        return f"BS{year_str} {disc}".strip()
     elif raw_name.startswith('MS'):
-        if year_match:
-            return f"MS {year_match.group(1)}"
-        return "MS"
+        if "Electives" in raw_name:
+            return raw_name
+        disc = raw_name.replace('MS', '').replace('(', '').replace(')', '').strip()
+        return f"MS{year_str} {disc}".strip()
     return raw_name
 
 def _extract_legend(row_data: list) -> dict:
