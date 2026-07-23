@@ -116,7 +116,22 @@ def get_batches():
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, color_hex FROM batches ORDER BY id ASC")
             rows = cursor.fetchall()
-            batches = [{"id": row[0], "name": row[1], "color_hex": row[2]} for row in rows]
+            seen_bases = set()
+            batches = []
+            for row in rows:
+                name = row[1]
+                parts = name.split()
+                if name.startswith("BS") and len(parts) >= 2:
+                    base_name = f"BS {parts[1]}"
+                elif name.startswith("MS"):
+                    base_name = "MS"
+                else:
+                    base_name = name
+                
+                if base_name not in seen_bases:
+                    seen_bases.add(base_name)
+                    batches.append({"id": row[0], "name": base_name, "color_hex": row[2]})
+                    
             return jsonify({"status": "success", "data": batches})
     except Exception as e:
         logger.exception("Failed to fetch batches")
@@ -125,21 +140,25 @@ def get_batches():
 
 @app.route('/api/subjects', methods=['GET'])
 def get_subjects():
-    """Returns subjects from subjects.db, optionally filtered by ?batch= parameter."""
+    """Returns subjects from subjects.db, optionally filtered by ?batch= and ?course= parameters."""
     import sqlite3
     batch = request.args.get('batch', '').strip()
+    course = request.args.get('course', '').strip()
+    
+    exact_batch = f"{batch} {course}".strip() if course else batch
+    
     try:
         with sqlite3.connect(SUBJECTS_DB) as conn:
             cursor = conn.cursor()
-            if batch:
+            if exact_batch:
                 cursor.execute("""
                     SELECT s.id, s.name, s.short_name 
                     FROM subjects s
                     JOIN batch_subjects bs ON s.id = bs.subject_id
                     JOIN batches b ON bs.batch_id = b.id
-                    WHERE LOWER(b.name) = LOWER(?) OR LOWER(b.name) LIKE LOWER(?)
+                    WHERE LOWER(b.name) = LOWER(?)
                     ORDER BY s.name ASC
-                """, (batch, f"%{batch}%"))
+                """, (exact_batch,))
             else:
                 cursor.execute("SELECT id, name, short_name FROM subjects ORDER BY name ASC")
             
@@ -265,6 +284,7 @@ def get_timetable():
     batch = batch.strip()
     course = course.strip().upper()
     section = section.strip().upper()
+    exact_batch = f"{batch} {course}".strip() if course else batch
 
     # --- Validate format ---
     if not course or not COURSE_PATTERN.match(course):
@@ -328,8 +348,8 @@ def get_timetable():
         raw_timetable = [[] for _ in range(5)]
 
         if sanitized_subjects:
-            primary_course = fetch_timetable_for_section(COURSE_DB, cosec, sanitized_subjects, batch)
-            primary_lab = fetch_timetable_for_section(LAB_DB, cosec, sanitized_subjects, batch)
+            primary_course = fetch_timetable_for_section(COURSE_DB, cosec, sanitized_subjects, exact_batch)
+            primary_lab = fetch_timetable_for_section(LAB_DB, cosec, sanitized_subjects, exact_batch)
             for i in range(5):
                 raw_timetable[i].extend(primary_course[i])
                 raw_timetable[i].extend(primary_lab[i])
