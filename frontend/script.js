@@ -231,18 +231,34 @@ async function initBatches() {
         }
 
         if (batches && Array.isArray(batches)) {
+            // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
+            const seenPrefixes = new Set();
             batches.forEach(b => {
                 if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective')) {
-                    const opt = document.createElement('option');
-                    opt.value = b.name;
-                    opt.textContent = b.name;
-                    select.appendChild(opt);
+                    // Strip the last word (discipline) to get prefix like "BS 25" or "MS"
+                    const parts = b.name.split(' ');
+                    let prefix;
+                    if (parts.length >= 3 && /^\d{2}$/.test(parts[1])) {
+                        // "BS 25 CS" -> "BS 25"
+                        prefix = parts.slice(0, 2).join(' ');
+                    } else {
+                        // "MS CS" -> "MS"
+                        prefix = parts[0];
+                    }
 
-                    if (repeatBatchSelect) {
-                        const opt2 = document.createElement('option');
-                        opt2.value = b.name;
-                        opt2.textContent = b.name;
-                        repeatBatchSelect.appendChild(opt2);
+                    if (!seenPrefixes.has(prefix)) {
+                        seenPrefixes.add(prefix);
+                        const opt = document.createElement('option');
+                        opt.value = prefix;
+                        opt.textContent = prefix;
+                        select.appendChild(opt);
+
+                        if (repeatBatchSelect) {
+                            const opt2 = document.createElement('option');
+                            opt2.value = prefix;
+                            opt2.textContent = prefix;
+                            repeatBatchSelect.appendChild(opt2);
+                        }
                     }
                 }
             });
