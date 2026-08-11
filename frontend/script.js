@@ -283,9 +283,15 @@ async function loadStep2Data(batchName, courseName) {
         const regSubjects = allSubjectsMap[exactBatch] || allSubjectsMap[batchName] || allSubjectsMap['ALL'] || [];
         renderSubjects(regSubjects, 'subject-list', true);
         
-        // 2. Electives
-        const electives = await fetchDecoded('/data/electives.bin') || [];
-        renderSubjects(electives, 'electives-list', false);
+        // 2. Electives (Only show for MS batches)
+        const electivesSection = document.getElementById('electives-section');
+        if (batchName.startsWith('MS')) {
+            if (electivesSection) electivesSection.style.display = 'block';
+            const electives = await fetchDecoded('/data/electives.bin') || [];
+            renderSubjects(electives, 'electives-list', false);
+        } else {
+            if (electivesSection) electivesSection.style.display = 'none';
+        }
 
         // 3. Repeater Data
         if (isRepeater) {
