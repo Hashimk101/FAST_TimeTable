@@ -309,7 +309,7 @@ body {
 
 .week-grid {
   display: grid;
-  grid-template-columns: 50px repeat(5, 1fr);
+  grid-template-columns: 50px repeat(6, 1fr);
   gap: var(--grid-gap);
   position: relative;
 }
