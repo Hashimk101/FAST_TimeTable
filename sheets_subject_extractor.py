@@ -2,7 +2,7 @@ import re
 from collections import OrderedDict
 from databaseHandler import get_sheets_service, days_of_week
 
-SPREADSHEET_ID = "1ZQJqdArlwCS965uw4sbJrB6j8rEPfZerMT7X8qkXSzY"
+SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
 
 def normalize_color(color_dict: dict) -> tuple:
     """Converts Google Sheets API backgroundColor float dict (0.0-1.0) to RGB tuple (0-255)."""

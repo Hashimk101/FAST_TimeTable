@@ -11,7 +11,7 @@ from databaseHandler import (
     get_sheets_service
 )
 
-SPREADSHEET_ID = "1ZQJqdArlwCS965uw4sbJrB6j8rEPfZerMT7X8qkXSzY"
+SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
 COURSE_DATABASE = "uni_timetable.db"
 LAB_DATABASE = "uni_timetable_lab.db"
 
