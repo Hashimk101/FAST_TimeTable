@@ -690,7 +690,7 @@ function updateDesktopTimetableCurrentState() {
 }
 
 function renderTimetable(timetableData) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const grid = document.getElementById('week-grid');
     const emptyState = document.getElementById('empty-state');
     
@@ -979,10 +979,10 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
 // === Issue #12: Contextual empty states ===
 function getNextClassInfo(timetableData, fromDayIdx) {
     if (!timetableData) return null;
-    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     // Search from the next day onwards, wrapping around
-    for (let offset = 1; offset <= 5; offset++) {
-        const checkIdx = (fromDayIdx + offset) % 5;
+    for (let offset = 1; offset <= 6; offset++) {
+        const checkIdx = (fromDayIdx + offset) % 6;
         if (timetableData[checkIdx] && timetableData[checkIdx].length > 0) {
             const sorted = [...timetableData[checkIdx]].sort((a, b) => parseTime(a.start_time) - parseTime(b.start_time));
             return {
@@ -1071,7 +1071,7 @@ function renderMobileView(timetableData) {
                 ? `Monday: ${nextInfo.subject} at ${nextInfo.time}`
                 : 'No upcoming classes found.';
         } else {
-            const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+            const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
             emptyState.querySelector('h2').textContent = `No classes ${dayNames[ttIdx]}`;
             emptyState.querySelector('p').textContent = nextInfo
                 ? `Next: ${nextInfo.subject} at ${nextInfo.time} ${nextInfo.day}`

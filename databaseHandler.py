@@ -11,7 +11,7 @@ from googleapiclient.discovery import build
 import sheets_to_df
 
 # list of working days
-days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 
 '''
