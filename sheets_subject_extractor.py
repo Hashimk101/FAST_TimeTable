@@ -142,7 +142,9 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
         # Process grid rows starting after the header (row index 4 onwards)
         for r_idx in range(4, len(grid)):
             row_cells = grid[r_idx].get('values', [])
-            for cell in row_cells:
+            for c_idx, cell in enumerate(row_cells):
+                if c_idx == 0:
+                    continue
                 raw_val = cell.get('formattedValue', '').strip()
                 if not raw_val or raw_val.lower() in ignore_keywords:
                     continue
