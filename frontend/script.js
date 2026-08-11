@@ -234,7 +234,7 @@ async function initBatches() {
             // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
             const seenPrefixes = new Set();
             batches.forEach(b => {
-                if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective')) {
+                if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective') && !b.name.includes('Repeat')) {
                     // Strip the last word (discipline) to get prefix like "BS 25" or "MS"
                     const parts = b.name.split(' ');
                     let prefix;
