@@ -9,7 +9,7 @@ COURSE_DB = 'uni_timetable.db'
 LAB_DB = 'uni_timetable_lab.db'
 OUTPUT_DIR = os.path.join('frontend', 'data')
 
-DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 def encode_data(data):
     json_str = json.dumps(data, separators=(',', ':'))
@@ -81,7 +81,7 @@ def generate_static_data():
             FROM subjects s
             JOIN batch_subjects bs ON s.id = bs.subject_id
             JOIN batches b ON bs.batch_id = b.id
-            WHERE b.name = 'Elective Courses'
+            WHERE b.name LIKE '%Elective%'
             ORDER BY s.name ASC
         """)
         electives = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in cursor.fetchall()]
@@ -95,7 +95,7 @@ def generate_static_data():
             FROM subjects s
             JOIN batch_subjects bs ON s.id = bs.subject_id
             JOIN batches b ON bs.batch_id = b.id
-            WHERE b.name = 'Repeat Courses'
+            WHERE b.name LIKE '%Repeat%'
             ORDER BY s.name ASC
         """)
         repeats = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in cursor.fetchall()]
