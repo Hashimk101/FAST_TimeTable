@@ -847,13 +847,13 @@ function buildMobileWeekStrip() {
     const offset = todayDow === 0 ? -6 : 1 - todayDow;
     monday.setDate(today.getDate() + offset);
 
-    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
         const d = new Date(monday);
         d.setDate(monday.getDate() + i);
         const isToday = d.toDateString() === today.toDateString();
-        // mobileSelectedDay: null=today, 0=Mon...4=Fri (matches timetable indices)
+        // mobileSelectedDay: null=today, 0=Mon...5=Sat (matches timetable indices)
         const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === i);
 
         const el = document.createElement('div');
@@ -947,14 +947,14 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
 
     const today = new Date();
     const todayDow = today.getDay();
-    // Map today to timetable index (Mon=0...Fri=4), weekend defaults to -1
-    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+    // Map today to timetable index (Mon=0...Sat=5), Sunday defaults to -1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 6) ? todayDow - 1 : -1;
     const currentDay = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
 
     if (currentDay === -1) {
-        if (deltaX < -60) mobileSelectedDay = 0; // weekend → first swipe to Monday
+        if (deltaX < -60) mobileSelectedDay = 0; // Sunday → first swipe to Monday
         else return;
-    } else if (deltaX < -60 && currentDay < 4) {
+    } else if (deltaX < -60 && currentDay < 5) {
         // Swipe left → next day
         mobileSelectedDay = currentDay + 1;
     } else if (deltaX > 60 && currentDay > 0) {
@@ -1055,9 +1055,9 @@ function renderMobileView(timetableData) {
     // Determine which day to show
     const today = new Date();
     const todayDow = today.getDay(); // 0=Sun...6=Sat
-    // Map today to timetable index: Mon=0...Fri=4, weekend=-1
-    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
-    // mobileSelectedDay is already 0=Mon...4=Fri or null (=today)
+    // Map today to timetable index: Mon=0...Sat=5, Sunday=-1
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 6) ? todayDow - 1 : -1;
+    // mobileSelectedDay is already 0=Mon...5=Sat or null (=today)
     const ttIdx = mobileSelectedDay === null ? todayTtIdx : mobileSelectedDay;
 
     // Clear previous content but keep empty state element
