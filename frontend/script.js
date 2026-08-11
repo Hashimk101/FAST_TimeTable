@@ -194,7 +194,7 @@ function decodeData(encodedStr) {
 
 async function fetchDecoded(url) {
     try {
-        const res = await fetch(url);
+        const res = await fetch(url + '?v=2');
         if (!res.ok) return null;
         const text = await res.text();
         return decodeData(text);
