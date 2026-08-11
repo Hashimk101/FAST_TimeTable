@@ -6,7 +6,7 @@ function checkForUpdates() {
   // 1. Enter the ID of the university's Google Sheet (from the URL)
   // For example, if URL is docs.google.com/spreadsheets/d/1ZQJqdArlwCS9...
   // The ID is 1ZQJqdArlwCS9...
-  var SHEET_ID = "1ZQJqdArlwCS965uw4sbJrb6j8rEPfZerMT7X8qkXSzY"; 
+  var SHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"; 
   
   // 2. Your GitHub Settings
   var GITHUB_TOKEN = "YOUR_GITHUB_PAT_HERE";
