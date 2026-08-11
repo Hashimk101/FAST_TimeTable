@@ -179,23 +179,76 @@ searchInput.addEventListener('input', (e) => {
     });
 });
 
+// === Binary Data Decoders ===
+function decodeData(encodedStr) {
+    try {
+        if (!encodedStr) return null;
+        const reversedStr = atob(encodedStr.trim());
+        const jsonStr = reversedStr.split('').reverse().join('');
+        return JSON.parse(jsonStr);
+    } catch (e) {
+        console.error("Failed to decode static binary data", e);
+        return null;
+    }
+}
+
+async function fetchDecoded(url) {
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const text = await res.text();
+        return decodeData(text);
+    } catch (e) {
+        console.warn(`Could not load ${url}`, e);
+        return null;
+    }
+}
+
+function sanitizeSlug(name) {
+    if (!name) return "ALL";
+    return name.trim().replace(/[^a-zA-Z0-9_\-]/g, '_');
+}
+
+function parseTimeMinutes(timeStr) {
+    try {
+        let [h, m] = timeStr.split(':').map(Number);
+        if (h >= 1 && h <= 7) h += 12;
+        return h * 60 + m;
+    } catch (e) {
+        return 0;
+    }
+}
+
 async function initBatches() {
     try {
-        const res = await fetch('/api/batches');
-        const data = await res.json();
+        const batches = await fetchDecoded('/data/batches.bin');
         const select = document.getElementById('batch-input');
+        const repeatBatchSelect = document.getElementById('repeat-batch-input');
+        
         select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
-        if (data.status === 'success') {
-            data.data.forEach(b => {
+        if (repeatBatchSelect) {
+            repeatBatchSelect.innerHTML = '<option value="" disabled selected>Select Repeat Batch</option>';
+        }
+
+        if (batches && Array.isArray(batches)) {
+            batches.forEach(b => {
                 if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective')) {
                     const opt = document.createElement('option');
                     opt.value = b.name;
                     opt.textContent = b.name;
                     select.appendChild(opt);
+
+                    if (repeatBatchSelect) {
+                        const opt2 = document.createElement('option');
+                        opt2.value = b.name;
+                        opt2.textContent = b.name;
+                        repeatBatchSelect.appendChild(opt2);
+                    }
                 }
             });
             if (localStorage.getItem('batch')) {
                 select.value = localStorage.getItem('batch');
+                if (repeatBatchSelect) repeatBatchSelect.value = localStorage.getItem('batch');
             }
         }
     } catch (e) {
@@ -206,26 +259,25 @@ async function initBatches() {
 async function loadStep2Data(batchName, courseName) {
     const profile = document.querySelector('input[name="student_profile"]:checked').value;
     const isRepeater = profile === 'repeater';
+    const exactBatch = courseName ? `${batchName} ${courseName}`.trim() : batchName;
 
     try {
-        // 1. Regular subjects
-        const regRes = await fetch(`/api/subjects?batch=${encodeURIComponent(batchName)}&course=${encodeURIComponent(courseName)}`);
-        const regData = await regRes.json();
-        renderSubjects(regData.data || [], 'subject-list', true);
+        // 1. Regular subjects from static data
+        const allSubjectsMap = await fetchDecoded('/data/subjects.bin') || {};
+        const regSubjects = allSubjectsMap[exactBatch] || allSubjectsMap[batchName] || allSubjectsMap['ALL'] || [];
+        renderSubjects(regSubjects, 'subject-list', true);
         
         // 2. Electives
-        const elRes = await fetch('/api/subjects/electives');
-        const elData = await elRes.json();
-        renderSubjects(elData.data || [], 'electives-list', false);
+        const electives = await fetchDecoded('/data/electives.bin') || [];
+        renderSubjects(electives, 'electives-list', false);
 
         // 3. Repeater Data
         if (isRepeater) {
             repeatSection.style.display = 'flex';
-            const repRes = await fetch(`/api/subjects/repeat?batch=${encodeURIComponent(batchName)}`);
-            const repData = await repRes.json();
+            const repeats = await fetchDecoded('/data/repeats.bin') || [];
             const repSelect = document.getElementById('repeat-subject-input');
             repSelect.innerHTML = '<option value="" disabled selected>Select Repeat Subject</option>';
-            (repData.data || []).forEach(sub => {
+            repeats.forEach(sub => {
                 const opt = document.createElement('option');
                 opt.value = sub.short_name;
                 opt.dataset.name = sub.name;
@@ -287,6 +339,7 @@ document.getElementById('close-repeat-dialog').addEventListener('click', () => {
 
 document.getElementById('add-repeat-btn').addEventListener('click', () => {
     const subjSelect = document.getElementById('repeat-subject-input');
+    const bSelect = document.getElementById('repeat-batch-input');
     const cInput = document.getElementById('repeat-course-input');
     const sInput = document.getElementById('repeat-section-input');
 
@@ -297,10 +350,11 @@ document.getElementById('add-repeat-btn').addEventListener('click', () => {
 
     const shortName = subjSelect.value;
     const subjName = subjSelect.options[subjSelect.selectedIndex].dataset.name;
+    const batchVal = (bSelect && bSelect.value) ? bSelect.value : (document.getElementById('batch-input')?.value || '');
     const courseVal = cInput.value.trim().toUpperCase();
     const sectionVal = sInput.value.trim().toUpperCase();
 
-    repeatCourses.push({ subject: shortName, name: subjName, course: courseVal, section: sectionVal });
+    repeatCourses.push({ batch: batchVal, subject: shortName, name: subjName, course: courseVal, section: sectionVal });
     
     subjSelect.value = "";
     cInput.value = "";
@@ -351,17 +405,10 @@ form.addEventListener('submit', async (e) => {
     
     // Gather primary courses
     const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
-    const selectedSubjects = Array.from(checkboxes).map(cb => cb.dataset.name);
+    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
     const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
     
-    // Convert repeatCourses for API payload
-    const repeatPayload = repeatCourses.map(rc => ({
-        subject: rc.subject,
-        course: rc.course,
-        section: rc.section
-    }));
-
-    if (selectedSubjects.length === 0 && repeatPayload.length === 0) {
+    if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
         alert("Please select at least one course.");
         return;
     }
@@ -375,18 +422,57 @@ form.addEventListener('submit', async (e) => {
     if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
 
     try {
-        const res = await fetch('/api/timetable', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                batch,
-                course, 
-                section, 
-                subjects: selectedSubjects,
-                repeat_courses: repeatPayload 
-            })
-        });
-        const data = await res.json();
+        const exactBatch = course ? `${batch} ${course}`.trim() : batch;
+        const cosec = `${course}-${section}`;
+        const primaryBatchSlug = sanitizeSlug(exactBatch);
+        const cosecSlug = sanitizeSlug(cosec);
+
+        let mergedTimetable = [[], [], [], [], []];
+
+        // 1. Fetch primary section schedule
+        const primaryFile = `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin`;
+        let primaryData = await fetchDecoded(primaryFile);
+        if (!primaryData) {
+            primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`);
+        }
+
+        if (primaryData && Array.isArray(primaryData)) {
+            for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+                const dayClasses = primaryData[dayIdx] || [];
+                const filtered = dayClasses.filter(c => selectedSubjects.includes(c.subject) || selectedNames.includes(c.subject));
+                mergedTimetable[dayIdx].push(...filtered);
+            }
+        }
+
+        // 2. Fetch repeat courses schedules
+        for (const rc of repeatCourses) {
+            const rcExactBatch = rc.course ? `${rc.batch || batch} ${rc.course}`.trim() : (rc.batch || batch);
+            const rcCosec = `${rc.course}-${rc.section}`;
+            const rcBatchSlug = sanitizeSlug(rcExactBatch);
+            const rcCosecSlug = sanitizeSlug(rcCosec);
+
+            let rcData = await fetchDecoded(`/data/schedules/${rcBatchSlug}__${rcCosecSlug}.bin`);
+            if (!rcData) {
+                rcData = await fetchDecoded(`/data/schedules/ALL__${rcCosecSlug}.bin`);
+            }
+            if (rcData && Array.isArray(rcData)) {
+                for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+                    const dayClasses = rcData[dayIdx] || [];
+                    const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
+                    mergedTimetable[dayIdx].push(...filtered);
+                }
+            }
+        }
+
+        // 3. Sort each day's entries by start time
+        for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+            mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
+        }
+
+        const data = {
+            status: 'success',
+            timetable: mergedTimetable
+        };
         
         if (data.status === 'success') {
             lastConfig = { batch, course, section, subjects: selectedSubjects, names: selectedNames, repeat_courses: repeatCourses };
@@ -492,7 +578,7 @@ window.addEventListener('DOMContentLoaded', () => {
         
         updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, allSubs, allNames);
         if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
-        restoreSubjectSelections();
+        if (typeof restoreSubjectSelections === 'function') restoreSubjectSelections();
         
         openBtn.innerHTML = `${gearSvg} ${lastConfig.course}-${lastConfig.section}`;
         document.getElementById('empty-state').style.display = 'none';
@@ -590,6 +676,10 @@ function updateDesktopTimetableCurrentState() {
 function renderTimetable(timetableData) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
     const grid = document.getElementById('week-grid');
+    const emptyState = document.getElementById('empty-state');
+    
+    if (emptyState) emptyState.style.display = 'none';
+    if (grid) grid.style.display = 'grid';
     
     // Remove existing day columns
     document.querySelectorAll('.day-column').forEach(el => el.remove());
