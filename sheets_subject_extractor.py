@@ -156,6 +156,10 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 # Ignore section-only or room-only labels
                 if raw_val.startswith("Room") or raw_val.startswith("Lab"):
                     continue
+                    
+                # Ignore room names that leak into the grid (e.g. "C-301", "D-404")
+                if re.match(r'^[A-Z]-\d{3}', raw_val, re.IGNORECASE):
+                    continue
 
                 # O(n) Hashmap extraction: Split before '(' opening brace
                 parts = raw_val.split('(', 1)
