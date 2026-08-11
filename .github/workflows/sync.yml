@@ -1,0 +1,48 @@
+name: Auto Sync Timetable Static Data
+
+on:
+  repository_dispatch:
+    types: [sheet_updated]
+  workflow_dispatch:
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+
+      - name: Write Google OAuth Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+          echo "$GOOGLE_TOKEN" > token.json
+
+      - name: Rebuild SQLite Databases from Google Sheets
+        run: |
+          python rebuild_subjects.py || true
+          python main.py || true
+
+      - name: Generate Obfuscated Static Binary Data
+        run: |
+          python generate_static_json.py
+
+      - name: Commit and Push Updated Data
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: sync timetable static data from Google Sheets" && git push)
