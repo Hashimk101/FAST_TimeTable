@@ -449,7 +449,7 @@ form.addEventListener('submit', async (e) => {
         const primaryBatchSlug = sanitizeSlug(exactBatch);
         const cosecSlug = sanitizeSlug(cosec);
 
-        let mergedTimetable = [[], [], [], [], []];
+        let mergedTimetable = [[], [], [], [], [], []];
 
         // 1. Fetch primary section schedule
         const primaryFile = `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin`;
@@ -459,7 +459,7 @@ form.addEventListener('submit', async (e) => {
         }
 
         if (primaryData && Array.isArray(primaryData)) {
-            for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+            for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
                 const dayClasses = primaryData[dayIdx] || [];
                 const filtered = dayClasses.filter(c => selectedSubjects.includes(c.subject) || selectedNames.includes(c.subject));
                 mergedTimetable[dayIdx].push(...filtered);
@@ -473,12 +473,18 @@ form.addEventListener('submit', async (e) => {
             const rcBatchSlug = sanitizeSlug(rcExactBatch);
             const rcCosecSlug = sanitizeSlug(rcCosec);
 
-            let rcData = await fetchDecoded(`/data/schedules/${rcBatchSlug}__${rcCosecSlug}.bin`);
+            let rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${rcCosecSlug}.bin`);
+            if (!rcData) {
+                rcData = await fetchDecoded(`/data/schedules/Repeat_Courses__${rcCosecSlug}.bin`);
+            }
+            if (!rcData) {
+                rcData = await fetchDecoded(`/data/schedules/${rcBatchSlug}__${rcCosecSlug}.bin`);
+            }
             if (!rcData) {
                 rcData = await fetchDecoded(`/data/schedules/ALL__${rcCosecSlug}.bin`);
             }
             if (rcData && Array.isArray(rcData)) {
-                for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+                for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
                     const dayClasses = rcData[dayIdx] || [];
                     const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
                     mergedTimetable[dayIdx].push(...filtered);
@@ -487,7 +493,7 @@ form.addEventListener('submit', async (e) => {
         }
 
         // 3. Sort each day's entries by start time
-        for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+        for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
             mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
         }
 
