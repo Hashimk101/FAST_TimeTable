@@ -296,16 +296,17 @@ async function loadStep2Data(batchName, courseName) {
         // 3. Repeater Data
         if (isRepeater) {
             repeatSection.style.display = 'flex';
-            const repeats = await fetchDecoded('/data/repeats.bin') || [];
+            repeatSubjectsData = await fetchDecoded('/data/repeats.bin') || [];
             const repSelect = document.getElementById('repeat-subject-input');
-            repSelect.innerHTML = '<option value="" disabled selected>Select Repeat Subject</option>';
-            repeats.forEach(sub => {
+            repSelect.innerHTML = '<option value="" disabled selected>Select Subject</option>';
+            repeatSubjectsData.forEach(sub => {
                 const opt = document.createElement('option');
                 opt.value = sub.short_name;
                 opt.dataset.name = sub.name;
                 opt.textContent = sub.name;
                 repSelect.appendChild(opt);
             });
+            
             renderRepeatCourses();
         } else {
             repeatSection.style.display = 'none';
@@ -351,6 +352,7 @@ function updateSubjectCount() {
 }
 
 // === Repeat Course Builder ===
+let repeatSubjectsData = [];
 const repeatDialog = document.getElementById('repeat-dialog');
 document.getElementById('open-repeat-dialog-btn').addEventListener('click', () => {
     repeatDialog.style.display = 'block';
@@ -361,28 +363,51 @@ document.getElementById('close-repeat-dialog').addEventListener('click', () => {
 
 document.getElementById('add-repeat-btn').addEventListener('click', () => {
     const subjSelect = document.getElementById('repeat-subject-input');
-    const bSelect = document.getElementById('repeat-batch-input');
-    const cInput = document.getElementById('repeat-course-input');
-    const sInput = document.getElementById('repeat-section-input');
+    const batchSelect = document.getElementById('repeat-batch-input');
+    const courseInput = document.getElementById('repeat-course-input');
+    const sectionInput = document.getElementById('repeat-section-input');
 
-    if (!subjSelect.value || !cInput.value.trim() || !sInput.value.trim()) {
-        alert("Please select a subject and enter course + section.");
+    if (!subjSelect.value) {
+        alert("Please select a subject.");
+        return;
+    }
+    if (!batchSelect.value) {
+        alert("Please select a batch.");
         return;
     }
 
     const shortName = subjSelect.value;
     const subjName = subjSelect.options[subjSelect.selectedIndex].dataset.name;
-    const batchVal = (bSelect && bSelect.value) ? bSelect.value : (document.getElementById('batch-input')?.value || '');
-    const courseVal = cInput.value.trim().toUpperCase();
-    const sectionVal = sInput.value.trim().toUpperCase();
+    const batchVal = batchSelect.value;
+    const discipline = courseInput.value.trim().toUpperCase();
+    const section = sectionInput.value.trim().toUpperCase();
 
-    repeatCourses.push({ batch: batchVal, subject: shortName, name: subjName, course: courseVal, section: sectionVal });
-    
+    // Build display label from what's provided
+    let displaySection = '';
+    if (discipline && section) {
+        displaySection = `${discipline}-${section}`;
+    } else if (discipline) {
+        displaySection = discipline;
+    } else if (section) {
+        displaySection = section;
+    } else {
+        displaySection = '(all)';
+    }
+
+    repeatCourses.push({
+        batch: batchVal,
+        subject: shortName,
+        name: subjName,
+        course: discipline,
+        section: section,
+        displaySection: displaySection
+    });
+
+    // Reset fields
     subjSelect.value = "";
-    cInput.value = "";
-    sInput.value = "";
+    courseInput.value = "";
+    sectionInput.value = "";
     repeatDialog.style.display = 'none';
-
     renderRepeatCourses();
 });
 
@@ -397,7 +422,7 @@ function renderRepeatCourses() {
         const chip = document.createElement('div');
         chip.className = 'repeat-chip';
         chip.innerHTML = `
-            ${rc.subject} (${rc.course}-${rc.section})
+            ${rc.subject} [${rc.displaySection}]
             <button type="button" class="remove-chip" onclick="removeRepeatCourse(${index})" aria-label="Remove">
                 &times;
             </button>
@@ -435,6 +460,14 @@ form.addEventListener('submit', async (e) => {
         return;
     }
 
+    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
+    if (!batch.startsWith("MS")) {
+        if (!course || !section) {
+            alert("Please select both a Discipline and a Section for regular batches.");
+            return;
+        }
+    }
+
     const btn = document.getElementById('generate-btn');
     btn.innerHTML = 'Generating...';
     btn.disabled = true;
@@ -445,14 +478,25 @@ form.addEventListener('submit', async (e) => {
 
     try {
         const exactBatch = course ? `${batch} ${course}`.trim() : batch;
-        const cosec = `${course}-${section}`;
+        
+        let cosec = '';
+        if (course && section) {
+            cosec = `${course}-${section}`;
+        } else if (course) {
+            cosec = course;
+        } else if (section) {
+            cosec = section;
+        }
+
         const primaryBatchSlug = sanitizeSlug(exactBatch);
         const cosecSlug = sanitizeSlug(cosec);
 
         let mergedTimetable = [[], [], [], [], [], []];
 
         // 1. Fetch primary section schedule
-        const primaryFile = `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin`;
+        const primaryFile = cosecSlug 
+            ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
+            : `/data/schedules/${primaryBatchSlug}__.bin`;
         let primaryData = await fetchDecoded(primaryFile);
         if (!primaryData) {
             primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`);
@@ -468,21 +512,44 @@ form.addEventListener('submit', async (e) => {
 
         // 2. Fetch repeat courses schedules
         for (const rc of repeatCourses) {
-            const rcExactBatch = rc.course ? `${rc.batch || batch} ${rc.course}`.trim() : (rc.batch || batch);
-            const rcCosec = `${rc.course}-${rc.section}`;
-            const rcBatchSlug = sanitizeSlug(rcExactBatch);
-            const rcCosecSlug = sanitizeSlug(rcCosec);
+            const disc = rc.course; // e.g. "CS" or ""
+            const sec = rc.section; // e.g. "A" or ""
+            const rcBatch = rc.batch; // e.g. "BS 24"
 
-            let rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${rcCosecSlug}.bin`);
-            if (!rcData) {
-                rcData = await fetchDecoded(`/data/schedules/Repeat_Courses__${rcCosecSlug}.bin`);
+            // Build the cosec slug based on what's provided
+            let cosecKey = '';
+            if (disc && sec) {
+                cosecKey = `${disc}-${sec}`; // "CS-C"
+            } else if (disc) {
+                cosecKey = disc; // "CS" (Algo-style, no section)
+            } else if (sec) {
+                cosecKey = sec; // "A" (AP-style, no discipline)
             }
-            if (!rcData) {
-                rcData = await fetchDecoded(`/data/schedules/${rcBatchSlug}__${rcCosecSlug}.bin`);
+
+            const cosecSlug = sanitizeSlug(cosecKey);
+            let rcData = null;
+
+            if (cosecKey) {
+                // Try exact batch first (e.g. BS_24_CS__CS-C.bin)
+                if (disc) {
+                    const exactBatchSlug = sanitizeSlug(`${rcBatch} ${disc}`);
+                    rcData = await fetchDecoded(`/data/schedules/${exactBatchSlug}__${cosecSlug}.bin`);
+                }
+                // Try BS Repeat Courses batch
+                if (!rcData) {
+                    rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${cosecSlug}.bin`);
+                }
+                // Try Repeat Courses batch
+                if (!rcData) {
+                    rcData = await fetchDecoded(`/data/schedules/Repeat_Courses__${cosecSlug}.bin`);
+                }
+                // Try ALL batch
+                if (!rcData) {
+                    rcData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`);
+                }
             }
-            if (!rcData) {
-                rcData = await fetchDecoded(`/data/schedules/ALL__${rcCosecSlug}.bin`);
-            }
+
+            // Silently skip if no data found — don't error
             if (rcData && Array.isArray(rcData)) {
                 for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
                     const dayClasses = rcData[dayIdx] || [];
@@ -759,12 +826,13 @@ function renderTimetable(timetableData) {
             card.style.setProperty('--card-border', color.border);
             
             card.innerHTML = `
-                <h3>${cls.subject}</h3>
-                <p class="card-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</p>
-                <p class="card-location">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                <div class="card-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
+                <h3 class="card-title">${cls.subject}</h3>
+                ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
+                <div class="card-location">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
                     ${cls.location}
-                </p>
+                </div>
             `;
             col.appendChild(card);
         });
@@ -1143,6 +1211,7 @@ function renderMobileView(timetableData) {
             <div class="m-past-check">${checkSvg}</div>
             <div class="m-past-info">
                 <div class="m-past-subject">${cls.subject}</div>
+                ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
                 <div class="m-past-loc">${cls.location}</div>
             </div>
             <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
@@ -1179,6 +1248,7 @@ function renderMobileView(timetableData) {
                     <span class="m-pulse-dot"></span>
                     <span class="m-hero-subject">${current.subject}</span>
                 </div>
+                ${current.status ? `<div class="card-status status-${current.status.toLowerCase()}">${current.status}</div>` : ''}
                 <div class="m-hero-section">${lastConfig ? lastConfig.course + '-' + lastConfig.section : ''}</div>
                 <div class="m-hero-times">
                     <span>${formatTime12h(current.start_time)}</span>
@@ -1210,6 +1280,7 @@ function renderMobileView(timetableData) {
                 ${countdownHtml}
                 <div class="m-up-time">${formatTime12h(upcoming.start_time)} – ${formatTime12h(upcoming.end_time)}</div>
                 <div class="m-up-subject">${upcoming.subject}</div>
+                ${upcoming.status ? `<div class="card-status status-${upcoming.status.toLowerCase()}">${upcoming.status}</div>` : ''}
                 <div class="m-up-detail">${upcoming.location}</div>
             </div>
         `;
@@ -1225,6 +1296,7 @@ function renderMobileView(timetableData) {
             <span class="mtl-dot"></span>
             <div class="m-later-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
             <div class="m-later-subject">${cls.subject}</div>
+            ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
             <div class="m-later-loc">${cls.location}</div>
         `;
         timeline.appendChild(el);
