@@ -1843,3 +1843,29 @@ kbd {
 [data-theme="light"] .m-hero-card {
   border-top: 1px solid rgba(0,0,0,0.04);
 }
+
+/* Status Badges */
+.card-status {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  background: var(--text-tertiary);
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.status-rescheduled, .status-resch {
+  background: #f59e0b; /* Amber */
+  color: #fff;
+}
+.status-cancelled {
+  background: #ef4444; /* Red */
+  color: #fff;
+}
+.status-reserved {
+  background: #3b82f6; /* Blue */
+  color: #fff;
+}

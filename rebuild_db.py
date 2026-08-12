@@ -8,7 +8,8 @@ from databaseHandler import (
     insert_timetable,
     read_and_clean_classroom_df,
     read_and_clean_lab_df,
-    get_sheets_service
+    get_sheets_service,
+    correct_typos_in_db
 )
 
 SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
@@ -35,6 +36,11 @@ def rebuild():
             print(f"Error processing {day}: {e}")
             import traceback
             traceback.print_exc()
+
+    # Correct typos after all data is inserted
+    print("\nApplying fuzzy matching to correct typos...")
+    correct_typos_in_db(COURSE_DATABASE)
+    correct_typos_in_db(LAB_DATABASE)
 
     print("\nDatabase rebuild complete!")
 
