@@ -47,6 +47,26 @@ function updateClock() {
 updateClock();
 setInterval(updateClock, 10000);
 
+// === Toast Notifications ===
+function showToast(message, type = 'error', duration = 3000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    let icon = '';
+    if (type === 'error') {
+        icon = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+    }
+    toast.innerHTML = `${icon} <span>${message}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('fade-out');
+        toast.addEventListener('animationend', () => {
+            toast.remove();
+        });
+    }, duration);
+}
+
 // === Modal Logic ===
 const modal = document.getElementById('config-modal');
 const openBtn = document.getElementById('open-config-btn');
@@ -136,7 +156,7 @@ nextBtn.addEventListener('click', async () => {
     const section = document.getElementById('section-input').value.trim();
 
     if (!batch || !course || !section) {
-        alert("Please select your batch, course, and enter your section.");
+        showToast("Please select your batch, course, and enter your section.");
         return;
     }
 
@@ -368,11 +388,11 @@ document.getElementById('add-repeat-btn').addEventListener('click', () => {
     const sectionInput = document.getElementById('repeat-section-input');
 
     if (!subjSelect.value) {
-        alert("Please select a subject.");
+        showToast("Please select a subject.");
         return;
     }
     if (!batchSelect.value) {
-        alert("Please select a batch.");
+        showToast("Please select a batch.");
         return;
     }
 
@@ -456,14 +476,14 @@ form.addEventListener('submit', async (e) => {
     const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
     
     if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
-        alert("Please select at least one course.");
+        showToast("Please select at least one course.");
         return;
     }
 
     // Step 1 Validation: Non-MS batches MUST have Discipline and Section
     if (!batch.startsWith("MS")) {
         if (!course || !section) {
-            alert("Please select both a Discipline and a Section for regular batches.");
+            showToast("Please select both a Discipline and a Section for regular batches.");
             return;
         }
     }
@@ -472,6 +492,10 @@ form.addEventListener('submit', async (e) => {
     btn.innerHTML = 'Generating...';
     btn.disabled = true;
     btn.style.opacity = '0.7';
+
+    // Yield to the main thread so the UI can paint the "Generating..." state
+    await new Promise(r => requestAnimationFrame(r));
+    await new Promise(r => setTimeout(r, 0));
 
     // Issue #15: Show skeleton while loading
     if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
@@ -610,7 +634,7 @@ form.addEventListener('submit', async (e) => {
             step1.classList.add('active-step');
             
         } else {
-            alert('Error: ' + data.message);
+            showToast('Error: ' + data.message);
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
@@ -636,7 +660,7 @@ form.addEventListener('submit', async (e) => {
             document.getElementById('week-grid').style.display = 'grid';
             closeModal();
         } else {
-            alert('Failed to connect to API and no cached schedule found.');
+            showToast('Failed to connect to API and no cached schedule found.');
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } finally {
