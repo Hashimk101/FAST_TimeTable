@@ -18,7 +18,7 @@ def encode_data(data):
 
 def sanitize_filename(name):
     if not name:
-        return "ALL"
+        return ""
     return re.sub(r'[^a-zA-Z0-9_\-]', '_', name.strip())
 
 def parse_time(time_str):
@@ -89,16 +89,29 @@ def generate_static_data():
             f.write(encode_data(electives))
         print(f"Generated electives.bin ({len(electives)} electives)")
 
-        # 4. Repeat subjects
+        # 4. Repeat subjects with sections
+        cursor.execute("ATTACH DATABASE ? AS uni", (COURSE_DB,))
         cursor.execute("""
-            SELECT DISTINCT s.id, s.name, s.short_name
+            SELECT DISTINCT s.id, s.name, s.short_name, t.SECTION
             FROM subjects s
             JOIN batch_subjects bs ON s.id = bs.subject_id
             JOIN batches b ON bs.batch_id = b.id
+            LEFT JOIN uni.timetable t ON t.SUBJECT = s.name AND t.BATCH = b.name
             WHERE b.name LIKE '%Repeat%'
-            ORDER BY s.name ASC
+            ORDER BY s.name ASC, t.SECTION ASC
         """)
-        repeats = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in cursor.fetchall()]
+        repeat_rows = cursor.fetchall()
+        cursor.execute("DETACH DATABASE uni")
+        
+        repeat_dict = {}
+        for r in repeat_rows:
+            sid, sname, short, section = r[0], r[1], r[2], r[3]
+            if sid not in repeat_dict:
+                repeat_dict[sid] = {"id": sid, "name": sname, "short_name": short, "sections": []}
+            if section is not None and section not in repeat_dict[sid]["sections"]:
+                repeat_dict[sid]["sections"].append(section)
+                
+        repeats = list(repeat_dict.values())
         with open(os.path.join(OUTPUT_DIR, 'repeats.bin'), 'w') as f:
             f.write(encode_data(repeats))
         print(f"Generated repeats.bin ({len(repeats)} repeat subjects)")
@@ -112,9 +125,13 @@ def generate_static_data():
             continue
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE SECTION != '' AND SECTION IS NOT NULL")
+            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH IS NOT NULL")
             for row in cursor.fetchall():
-                combos.add((row[0], row[1]))
+                b, s = row[0], row[1]
+                if b and b.startswith('MS'):
+                    combos.add((b, ''))
+                elif s: # Only add BS/Repeat combos if they have a section
+                    combos.add((b, s))
 
     print(f"Processing {len(combos)} batch/section combinations for schedules...")
 
@@ -131,15 +148,21 @@ def generate_static_data():
                     continue
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
-                    if batch_val:
+                    if str(batch_val).startswith('MS'):
                         cursor.execute(f"""
-                            SELECT START_TIME, END_TIME, SUBJECT, {loc_col}
+                            SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
+                            FROM timetable
+                            WHERE DAY = ? AND BATCH = ?
+                        """, (day, batch_val))
+                    elif batch_val:
+                        cursor.execute(f"""
+                            SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
                             FROM timetable
                             WHERE DAY = ? AND SECTION = ? AND BATCH = ?
                         """, (day, section_val, batch_val))
                     else:
                         cursor.execute(f"""
-                            SELECT START_TIME, END_TIME, SUBJECT, {loc_col}
+                            SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
                             FROM timetable
                             WHERE DAY = ? AND SECTION = ?
                         """, (day, section_val))
@@ -149,7 +172,8 @@ def generate_static_data():
                             "start_time": row[0],
                             "end_time": row[1],
                             "subject": row[2],
-                            "location": row[3]
+                            "location": row[3],
+                            "status": row[4]
                         })
 
             # Sort by start_time

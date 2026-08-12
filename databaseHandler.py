@@ -36,6 +36,8 @@ def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLA
                 SUBJECT TEXT NOT NULL,
                 {location_column} TEXT NOT NULL,
                 SECTION TEXT NOT NULL,
+                BATCH TEXT,
+                STATUS TEXT,
 
                 UNIQUE(DAY, {location_column}, START_TIME) -- to avoid overlapping classes in the same classroom just in case the timetable is incorrect
                 )
@@ -44,6 +46,43 @@ def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLA
     crsr.execute("DELETE FROM timetable")
 
     crsr.execute(''' CREATE INDEX IF NOT EXISTS idx_day_section ON timetable (DAY, SECTION, SUBJECT) ''')
+    conn.commit()
+    conn.close()
+
+def correct_typos_in_db(db_name: str = 'uni_timetable.db'):
+    import difflib
+    from collections import Counter
+    conn = sqlite3.connect(db_name)
+    crsr = conn.cursor()
+    
+    # Get all subjects
+    crsr.execute("SELECT SUBJECT FROM timetable")
+    rows = crsr.fetchall()
+    if not rows:
+        conn.close()
+        return
+        
+    subjects = [r[0] for r in rows]
+    counts = Counter(subjects)
+    
+    # Canonical subjects are those appearing 3 or more times
+    canonical = [s for s, c in counts.items() if c >= 3]
+    if not canonical:
+        conn.close()
+        return
+        
+    corrections = {}
+    for s, c in counts.items():
+        if c <= 2:
+            matches = difflib.get_close_matches(s, canonical, n=1, cutoff=0.85)
+            if matches:
+                corrections[s] = matches[0]
+                
+    # Apply corrections
+    for old_s, new_s in corrections.items():
+        print(f"  [FUZZY] Correcting typo in DB '{db_name}': '{old_s}' -> '{new_s}'")
+        crsr.execute("UPDATE timetable SET SUBJECT = ? WHERE SUBJECT = ?", (new_s, old_s))
+        
     conn.commit()
     conn.close()
 
@@ -159,19 +198,29 @@ def check_if_time_in_subject(subject: str) -> bool:
     return '-' in second and ':' in second
 
 def separate_subject_and_section(subject_with_section: str) -> tuple:
-    try:
-        parts = subject_with_section.split('(', 1)
+    text = subject_with_section.strip()
+    
+    # Fix missing space before '(' — "Elective(SE-A)" → "Elective (SE-A)"
+    text = re.sub(r'(\w)\(', r'\1 (', text)
+    
+    if '(' in text:
+        parts = text.split('(', 1)
         subject = parts[0].strip()
-        # Only take what's inside the parentheses, not after them
-        inside_paren = parts[1]
-        if ')' in inside_paren:
-            section = inside_paren.split(')', 1)[0].strip()
+        inside = parts[1]
+        if ')' in inside:
+            section = inside.split(')', 1)[0].strip()
         else:
-            section = inside_paren.strip()
+            section = inside.strip()
         return subject, clean_section(section)
-    except IndexError:
-        # This runs for "NIL" or any cell without a '('
-        return subject_with_section, ""
+    
+    # Fallback 1: No '(' but text ends with section-like pattern
+    # e.g. "PF CS-A" → subject="PF", section="CS-A"
+    match = re.match(r'^(.+?)\s+([A-Z]{2,4}-[A-Z]\w*)$', text)
+    if match:
+        return match.group(1).strip(), clean_section(match.group(2).strip())
+    
+    # Last resort: full text as subject, empty section
+    return text, ""
 
 def separate_time_and_section_from_subject(subject: str) -> tuple:
     '''
@@ -209,9 +258,36 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
         except sqlite3.OperationalError:
             pass # Column already exists
 
+        # Ensure STATUS column exists
+        try:
+            crsr.execute("ALTER TABLE timetable ADD COLUMN STATUS TEXT")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+
+        SKIP_PATTERNS = [
+            r'^[A-Z]-\d{3}',              # Room names: D-301, C-405
+            r'^P\s+R\s+A\s+Y\s+E\s+R',   # PRAYER BREAK
+            r'^Tutorial\s',                # Tutorial Batch 26
+            r'^EE$'                        # Standalone EE
+        ]
+        skip_words = {'prayer', 'break', 'tutorial'}
+
         timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
         for entry in timetable_list:
+            raw_subj = entry['subject'].strip()
+            if any(re.match(p, raw_subj) for p in SKIP_PATTERNS):
+                continue
+            if raw_subj.lower() in skip_words:
+                continue
+
+            # Extract Rescheduled/Cancelled status
+            status = None
+            status_match = re.search(r'\b(Rescheduled|ReSch|Cancelled|Reserved)\s*$', raw_subj, re.IGNORECASE)
+            if status_match:
+                status = status_match.group(1).strip()
+                entry['subject'] = raw_subj[:status_match.start()].strip()
+
             # Extract batch from subject if present
             batch = None
             match = re.search(r'\[(.*?)\]$', entry['subject'])
@@ -240,11 +316,15 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             entry['start_time'] = start_time
             entry['end_time'] = end_time
 
+            # Assign to repeat courses if no section and no batch
+            if not entry.get('section') and not batch:
+                batch = 'BS Repeat Courses'
+
             # ... rest of the insertion code ...
             crsr.execute(f'''
-                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section'], batch))
+                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section'], batch, status))
 
         conn.commit()
     finally:
