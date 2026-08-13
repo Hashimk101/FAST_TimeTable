@@ -243,12 +243,8 @@ async function initBatches() {
     try {
         const batches = await fetchDecoded('/data/batches.bin');
         const select = document.getElementById('batch-input');
-        const repeatBatchSelect = document.getElementById('repeat-batch-input');
         
         select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
-        if (repeatBatchSelect) {
-            repeatBatchSelect.innerHTML = '<option value="" disabled selected>Select Repeat Batch</option>';
-        }
 
         if (batches && Array.isArray(batches)) {
             // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
@@ -272,19 +268,11 @@ async function initBatches() {
                         opt.value = prefix;
                         opt.textContent = prefix;
                         select.appendChild(opt);
-
-                        if (repeatBatchSelect) {
-                            const opt2 = document.createElement('option');
-                            opt2.value = prefix;
-                            opt2.textContent = prefix;
-                            repeatBatchSelect.appendChild(opt2);
-                        }
                     }
                 }
             });
             if (localStorage.getItem('batch')) {
                 select.value = localStorage.getItem('batch');
-                if (repeatBatchSelect) repeatBatchSelect.value = localStorage.getItem('batch');
             }
         }
     } catch (e) {
@@ -381,52 +369,51 @@ document.getElementById('close-repeat-dialog').addEventListener('click', () => {
     repeatDialog.style.display = 'none';
 });
 
+// When user picks a repeat subject, populate the section dropdown from repeats.bin data
+document.getElementById('repeat-subject-input').addEventListener('change', (e) => {
+    const sectionSelect = document.getElementById('repeat-section-input');
+    const selectedShortName = e.target.value;
+    const subjectData = repeatSubjectsData.find(s => s.short_name === selectedShortName);
+
+    sectionSelect.innerHTML = '';
+
+    if (!subjectData || subjectData.sections.length === 0) {
+        // No sections for this subject — add a single "All" option
+        sectionSelect.innerHTML = '<option value="" selected>(All sections)</option>';
+        return;
+    }
+
+    subjectData.sections.forEach(sec => {
+        const opt = document.createElement('option');
+        opt.value = sec;
+        opt.textContent = sec;
+        sectionSelect.appendChild(opt);
+    });
+});
+
 document.getElementById('add-repeat-btn').addEventListener('click', () => {
     const subjSelect = document.getElementById('repeat-subject-input');
-    const batchSelect = document.getElementById('repeat-batch-input');
-    const courseInput = document.getElementById('repeat-course-input');
-    const sectionInput = document.getElementById('repeat-section-input');
+    const sectionSelect = document.getElementById('repeat-section-input');
 
     if (!subjSelect.value) {
         showToast("Please select a subject.");
         return;
     }
-    if (!batchSelect.value) {
-        showToast("Please select a batch.");
-        return;
-    }
 
     const shortName = subjSelect.value;
     const subjName = subjSelect.options[subjSelect.selectedIndex].dataset.name;
-    const batchVal = batchSelect.value;
-    const discipline = courseInput.value.trim().toUpperCase();
-    const section = sectionInput.value.trim().toUpperCase();
-
-    // Build display label from what's provided
-    let displaySection = '';
-    if (discipline && section) {
-        displaySection = `${discipline}-${section}`;
-    } else if (discipline) {
-        displaySection = discipline;
-    } else if (section) {
-        displaySection = section;
-    } else {
-        displaySection = '(all)';
-    }
+    const section = sectionSelect.value; // e.g. "CS-A", "AI/DS", or ""
 
     repeatCourses.push({
-        batch: batchVal,
         subject: shortName,
         name: subjName,
-        course: discipline,
         section: section,
-        displaySection: displaySection
+        displaySection: section || '(all)'
     });
 
     // Reset fields
     subjSelect.value = "";
-    courseInput.value = "";
-    sectionInput.value = "";
+    sectionSelect.innerHTML = '<option value="" disabled selected>Select a subject first</option>';
     repeatDialog.style.display = 'none';
     renderRepeatCourses();
 });
@@ -535,47 +522,16 @@ form.addEventListener('submit', async (e) => {
         }
 
         // 2. Fetch repeat courses schedules
+        // Repeat courses always live in the "BS Repeat Courses" batch.
+        // The section from repeats.bin already includes discipline prefix (e.g. "CS-A", "AI/DS").
         for (const rc of repeatCourses) {
-            const disc = rc.course; // e.g. "CS" or ""
-            const sec = rc.section; // e.g. "A" or ""
-            const rcBatch = rc.batch; // e.g. "BS 24"
-
-            // Build the cosec slug based on what's provided
-            let cosecKey = '';
-            if (disc && sec) {
-                cosecKey = `${disc}-${sec}`; // "CS-C"
-            } else if (disc) {
-                cosecKey = disc; // "CS" (Algo-style, no section)
-            } else if (sec) {
-                cosecKey = sec; // "A" (AP-style, no discipline)
+            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS"
+            
+            let rcData = null;
+            if (sectionSlug) {
+                rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${sectionSlug}.bin`);
             }
 
-            const cosecSlug = sanitizeSlug(cosecKey);
-            let rcData = [[], [], [], [], [], []];
-            let foundAny = false;
-
-            if (cosecKey) {
-                let fetchUrls = [];
-                if (disc) {
-                    const exactBatchSlug = sanitizeSlug(`${rcBatch} ${disc}`);
-                    fetchUrls.push(`/data/schedules/${exactBatchSlug}__${cosecSlug}.bin`);
-                }
-                fetchUrls.push(`/data/schedules/BS_Repeat_Courses__${cosecSlug}.bin`);
-                fetchUrls.push(`/data/schedules/Repeat_Courses__${cosecSlug}.bin`);
-                fetchUrls.push(`/data/schedules/ALL__${cosecSlug}.bin`);
-
-                for (const url of fetchUrls) {
-                    const data = await fetchDecoded(url);
-                    if (data && Array.isArray(data)) {
-                        foundAny = true;
-                        for (let i = 0; i < 6; i++) {
-                            if (data[i]) rcData[i].push(...data[i]);
-                        }
-                    }
-                }
-            }
-
-            // Silently skip if no data found — don't error
             if (rcData && Array.isArray(rcData)) {
                 for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
                     const dayClasses = rcData[dayIdx] || [];
