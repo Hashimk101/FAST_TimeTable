@@ -36,7 +36,7 @@ jobs:
       - name: Rebuild SQLite Databases from Google Sheets
         run: |
           python rebuild_subjects.py || true
-          python main.py || true
+          python rebuild_db.py || true
 
       - name: Generate Obfuscated Static Binary Data
         run: |
