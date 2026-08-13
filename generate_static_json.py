@@ -130,8 +130,8 @@ def generate_static_data():
                 b, s = row[0], row[1]
                 if b and b.startswith('MS'):
                     combos.add((b, ''))
-                elif s: # Only add BS/Repeat combos if they have a section
-                    combos.add((b, s))
+                elif b:
+                    combos.add((b, s or ''))
 
     print(f"Processing {len(combos)} batch/section combinations for schedules...")
 
