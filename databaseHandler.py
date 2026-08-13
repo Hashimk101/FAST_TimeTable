@@ -182,6 +182,11 @@ def clean_section(raw_section: str) -> str:
     # These are room patterns: single letter + dash + digits
     section = re.sub(r'\s+[A-Z]-\d{3,4}$', '', section).strip()
 
+    # Reject if the remaining string is just a discipline name without a section
+    bare_disciplines = {'CS', 'SE', 'AI', 'DS', 'CY', 'AI/DS', 'AI/DS/SE'}
+    if section in bare_disciplines:
+        return ""
+
     return section
 
 
