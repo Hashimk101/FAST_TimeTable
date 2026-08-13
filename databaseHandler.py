@@ -116,18 +116,22 @@ def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -
             # does NOT have a custom time inside it (e.g. "Civics... 02:00"),
             # then it is likely garbage data. Skip it.
             is_unnamed_col = "Unnamed" in str(time_slot)
-            has_custom_time = check_if_time_in_subject(str(subject))
 
-            if is_unnamed_col and not has_custom_time:
-                continue
+            for single_subject in str(subject).split(" | "):
+                single_subject = single_subject.strip()
+                if not single_subject or single_subject == "NIL":
+                    continue
+                    
+                has_custom_time = check_if_time_in_subject(single_subject)
+                if is_unnamed_col and not has_custom_time:
+                    continue
 
-            entry = {
-                'location': location,
-                'time_slot': time_slot,
-                'subject': subject,
-            }
-
-            timetable_list.append(entry)
+                entry = {
+                    'location': location,
+                    'time_slot': time_slot,
+                    'subject': single_subject,
+                }
+                timetable_list.append(entry)
 
     return timetable_list
 
