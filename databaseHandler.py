@@ -273,9 +273,11 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             r'^[A-Z]-\d{3}',              # Room names: D-301, C-405
             r'^P\s+R\s+A\s+Y\s+E\s+R',   # PRAYER BREAK
             r'^Tutorial\s',                # Tutorial Batch 26
-            r'^EE$'                        # Standalone EE
+            r'^EE$',                       # Standalone EE
+            r'^FSM$',                      # Explicitly drop FSM
+            r'^PPIT\s*Seminar$'            # Explicitly drop PPIT Seminar
         ]
-        skip_words = {'prayer', 'break', 'tutorial'}
+        skip_words = {'prayer', 'break', 'tutorial', 'fsm', 'ppit seminar'}
 
         timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
