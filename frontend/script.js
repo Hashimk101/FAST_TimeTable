@@ -551,25 +551,27 @@ form.addEventListener('submit', async (e) => {
             }
 
             const cosecSlug = sanitizeSlug(cosecKey);
-            let rcData = null;
+            let rcData = [[], [], [], [], [], []];
+            let foundAny = false;
 
             if (cosecKey) {
-                // Try exact batch first (e.g. BS_24_CS__CS-C.bin)
+                let fetchUrls = [];
                 if (disc) {
                     const exactBatchSlug = sanitizeSlug(`${rcBatch} ${disc}`);
-                    rcData = await fetchDecoded(`/data/schedules/${exactBatchSlug}__${cosecSlug}.bin`);
+                    fetchUrls.push(`/data/schedules/${exactBatchSlug}__${cosecSlug}.bin`);
                 }
-                // Try BS Repeat Courses batch
-                if (!rcData) {
-                    rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${cosecSlug}.bin`);
-                }
-                // Try Repeat Courses batch
-                if (!rcData) {
-                    rcData = await fetchDecoded(`/data/schedules/Repeat_Courses__${cosecSlug}.bin`);
-                }
-                // Try ALL batch
-                if (!rcData) {
-                    rcData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`);
+                fetchUrls.push(`/data/schedules/BS_Repeat_Courses__${cosecSlug}.bin`);
+                fetchUrls.push(`/data/schedules/Repeat_Courses__${cosecSlug}.bin`);
+                fetchUrls.push(`/data/schedules/ALL__${cosecSlug}.bin`);
+
+                for (const url of fetchUrls) {
+                    const data = await fetchDecoded(url);
+                    if (data && Array.isArray(data)) {
+                        foundAny = true;
+                        for (let i = 0; i < 6; i++) {
+                            if (data[i]) rcData[i].push(...data[i]);
+                        }
+                    }
                 }
             }
 
