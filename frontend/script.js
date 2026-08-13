@@ -525,11 +525,12 @@ form.addEventListener('submit', async (e) => {
         // Repeat courses always live in the "BS Repeat Courses" batch.
         // The section from repeats.bin already includes discipline prefix (e.g. "CS-A", "AI/DS").
         for (const rc of repeatCourses) {
-            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS"
+            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS", "" -> "ALL"
+            const finalSectionPath = sectionSlug === "ALL" ? "" : sectionSlug;
             
             let rcData = null;
             if (sectionSlug) {
-                rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${sectionSlug}.bin`);
+                rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${finalSectionPath}.bin`);
             }
 
             if (rcData && Array.isArray(rcData)) {
