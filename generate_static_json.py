@@ -91,17 +91,23 @@ def generate_static_data():
 
         # 4. Repeat subjects with sections
         cursor.execute("ATTACH DATABASE ? AS uni", (COURSE_DB,))
+        cursor.execute("ATTACH DATABASE ? AS lab", (LAB_DB,))
         cursor.execute("""
             SELECT DISTINCT s.id, s.name, s.short_name, t.SECTION
             FROM subjects s
             JOIN batch_subjects bs ON s.id = bs.subject_id
             JOIN batches b ON bs.batch_id = b.id
-            LEFT JOIN uni.timetable t ON t.SUBJECT = s.name AND t.BATCH = b.name
+            LEFT JOIN (
+                SELECT SUBJECT, BATCH, SECTION FROM uni.timetable
+                UNION
+                SELECT SUBJECT, BATCH, SECTION FROM lab.timetable
+            ) t ON t.SUBJECT = s.name AND t.BATCH = b.name
             WHERE b.name LIKE '%Repeat%'
             ORDER BY s.name ASC, t.SECTION ASC
         """)
         repeat_rows = cursor.fetchall()
         cursor.execute("DETACH DATABASE uni")
+        cursor.execute("DETACH DATABASE lab")
         
         repeat_dict = {}
         for r in repeat_rows:
