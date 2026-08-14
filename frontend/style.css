@@ -1,16 +1,16 @@
 :root {
   /* High-end Dark Theme */
-  --bg-color: #0F0D0B;
-  --surface-color: #1A1714;
-  --surface-hover: #221F1B;
-  --border-color: #2E2A26;
-  --text-primary: #F0ECE8;
-  --text-secondary: #9A918A;
-  --text-tertiary: #786F67;
+  --bg-color: #0C0A09;
+  --surface-color: #171412;
+  --surface-hover: #201C18;
+  --border-color: #302A24;
+  --text-primary: #F7F4F0;
+  --text-secondary: #ADA59D;
+  --text-tertiary: #8E847B;
   
-  --accent: #C49A7C;
-  --accent-hover: #D9B092;
-  --accent-subtle: rgba(196, 154, 124, 0.08);
+  --accent: #C9A082;
+  --accent-hover: #DEB597;
+  --accent-subtle: rgba(201, 160, 130, 0.10);
 
   --r-sm: 6px;
   --r-md: 10px;
@@ -19,11 +19,11 @@
   --r-full: 999px;
 
   /* Card Colors (Dark Mode) */
-  --card-1: #322820;
-  --card-2: #283028;
-  --card-3: #262C34;
-  --card-4: #34262C;
-  --card-5: #302C1E;
+  --card-1: #4A3A2F;
+  --card-2: #3A473A;
+  --card-3: #37404D;
+  --card-4: #4D3742;
+  --card-5: #47412E;
   
   --card-border-1: #8B6B50;
   --card-border-2: #5A7A5E;
@@ -34,7 +34,7 @@
   /* Time settings */
   --day-start: 8; 
   --hour-height: 85px;
-  --grid-gap: 10px;
+  --grid-gap: 14px;
   --header-height: 64px;
 }
 
@@ -110,7 +110,7 @@ body {
   z-index: 100;
   backdrop-filter: blur(16px) saturate(1.5);
   -webkit-backdrop-filter: blur(16px) saturate(1.5);
-  background: color-mix(in srgb, var(--bg-color) 85%, transparent);
+  background: color-mix(in srgb, var(--surface-color) 85%, transparent);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -212,7 +212,7 @@ body {
 .status-bar {
   padding: 0 48px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--accent-subtle);
+  background: var(--surface-hover);
 }
 
 .status-bar-inner {
@@ -243,12 +243,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 3px 10px;
   border-radius: 100px;
   font-size: 0.75rem;
   font-weight: 500;
   white-space: nowrap;
-  border: 1px solid var(--card-border);
+  border: 1px solid color-mix(in srgb, var(--card-border) 40%, transparent);
   background: var(--card-bg);
   color: var(--text-primary);
 }
@@ -300,7 +300,7 @@ body {
 
 /* === Timetable Grid === */
 .timetable-container {
-  padding: 24px 48px 80px 48px;
+  padding: 32px 48px 80px 48px;
   max-width: 1800px;
   margin: 0 auto;
 }
@@ -341,7 +341,7 @@ body {
   max-width: 1700px;
   height: 1px;
   background: var(--border-color);
-  opacity: 0.25;
+  opacity: 0.12;
   z-index: 0;
 }
 
@@ -351,11 +351,11 @@ body {
   display: flex;
   flex-direction: column;
   min-height: calc((20 - var(--day-start)) * var(--hour-height) + 44px); 
-  border-left: 1px solid var(--border-color);
+  border-left: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
 }
 
 .day-column:last-child {
-  border-right: 1px solid var(--border-color);
+  border-right: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
 }
 
 .day-header {
@@ -365,8 +365,8 @@ body {
   justify-content: center;
   font-weight: 500;
   color: var(--text-secondary);
-  font-size: 0.75rem;
-  letter-spacing: 0.1em;
+  font-size: 0.72rem;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   background: var(--accent-subtle);
   border-bottom: 1px solid var(--border-color);
@@ -377,11 +377,11 @@ body {
   position: absolute;
   width: calc(100% - 12px);
   left: 6px;
-  border-radius: var(--r-sm);
-  padding: 10px 14px;
+  border-radius: 8px;
+  padding: 12px 16px;
   background: var(--card-bg);
-  border-left: 3px solid var(--card-border);
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset, 0 1px 3px rgba(0,0,0,0.2);
+  border-left: 4px solid var(--card-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-border) 25%, transparent) inset, 0 2px 8px rgba(0,0,0,0.25);
   color: var(--text-primary);
   box-sizing: border-box;
   overflow: hidden;
@@ -402,30 +402,30 @@ body {
 }
 
 .subject-card h3 {
-  margin: 0 0 4px 0;
-  font-size: 0.8rem;
-  font-weight: 600;
+  margin: 0 0 6px 0;
+  font-size: 0.85rem;
+  font-weight: 700;
   line-height: 1.3;
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
 .subject-card .card-time {
-  margin: 0;
+  margin: 0 0 4px 0;
   font-size: 0.7rem;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .subject-card .card-location {
-  margin: 4px 0 0 0;
-  font-size: 0.7rem;
-  color: var(--text-secondary);
+  margin: 0;
+  font-size: 0.68rem;
+  color: var(--text-tertiary);
   display: flex;
   align-items: center;
   gap: 4px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .subject-card svg {
@@ -656,11 +656,11 @@ body {
 .submit-btn {
   width: 100%;
   background: var(--accent);
-  color: #FFFFFF;
+  color: #120F0C;
   border: none;
   padding: 13px;
   border-radius: var(--r-sm);
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.85rem;
   cursor: pointer;
   transition: background 0.12s, transform 0.12s;
@@ -669,6 +669,9 @@ body {
   justify-content: center;
   gap: 8px;
   letter-spacing: -0.01em;
+}
+[data-theme="light"] .submit-btn {
+  color: #FFFFFF;
 }
 .submit-btn:hover { background: var(--accent-hover); }
 .submit-btn:active { transform: scale(0.98); background: var(--accent-pressed, var(--accent-hover)); }
@@ -762,6 +765,7 @@ body {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+.profile-card .card-content h3,
 .profile-card .card-content h4 {
   font-size: 0.85rem;
   font-weight: 600;
@@ -850,9 +854,11 @@ body {
   margin-bottom: 12px;
 }
 
+.repeat-dialog-header h3,
 .repeat-dialog-header h4 {
   font-size: 0.9rem;
   margin: 0;
+  color: var(--text-primary);
 }
 
 .close-mini-btn {
@@ -1191,7 +1197,7 @@ kbd {
   font-size: 0.6rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-weight: 600;
 }
 
@@ -1615,7 +1621,7 @@ kbd {
   gap: 3px;
   background: none;
   border: none;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   cursor: pointer;
   font-family: inherit;
 }
@@ -1738,7 +1744,7 @@ kbd {
   border-left: 1px solid var(--accent);
 }
 [data-theme="dark"] .day-column--today {
-  background-color: rgba(255,255,255,0.015);
+  background-color: rgba(255,255,255,0.025);
 }
 .day-column--today .day-header {
   color: var(--accent);
@@ -1799,7 +1805,7 @@ kbd {
 }
 
 .day-column:hover {
-  background-color: rgba(255,255,255,0.01);
+  background-color: rgba(255,255,255,0.02);
   transition: background-color 0.2s ease;
 }
 [data-theme="light"] .day-column:hover {
