@@ -52,15 +52,18 @@ def rebuild_subjects_db():
     """)
 
     # --- FUZZY MATCHING SYNC ---
-    # Fetch canonical, typo-corrected subjects from uni_timetable.db
-    canonical_conn = sqlite3.connect('uni_timetable.db')
-    canonical_cursor = canonical_conn.cursor()
-    try:
-        canonical_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable")
-        canonical_subjects = [row[0] for row in canonical_cursor.fetchall()]
-    except sqlite3.OperationalError:
-        canonical_subjects = [] # DB might not exist yet if run out of order
-    canonical_conn.close()
+    # Fetch canonical, typo-corrected subjects from both theory and lab timetable databases
+    canonical_subjects_set = set()
+    for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
+        if os.path.exists(db_file):
+            try:
+                with sqlite3.connect(db_file) as c_conn:
+                    c_cursor = c_conn.cursor()
+                    c_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable WHERE SUBJECT IS NOT NULL")
+                    canonical_subjects_set.update(row[0].strip() for row in c_cursor.fetchall() if row[0] and row[0].strip())
+            except Exception as e:
+                print(f"Warning: Could not read canonical subjects from {db_file}: {e}")
+    canonical_subjects = list(canonical_subjects_set)
 
     import difflib
     corrected_unique_subjects = {}
