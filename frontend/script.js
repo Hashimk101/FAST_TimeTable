@@ -372,23 +372,46 @@ document.getElementById('close-repeat-dialog').addEventListener('click', () => {
 // When user picks a repeat subject, populate the section dropdown from repeats.bin data
 document.getElementById('repeat-subject-input').addEventListener('change', (e) => {
     const sectionSelect = document.getElementById('repeat-section-input');
-    const selectedShortName = e.target.value;
-    const subjectData = repeatSubjectsData.find(s => s.short_name === selectedShortName);
+    const selectedVal = e.target.value;
+    const selectedOption = e.target.options[e.target.selectedIndex];
+    const selectedName = selectedOption ? selectedOption.dataset.name : '';
+
+    const subjectData = repeatSubjectsData.find(s => 
+        s.short_name === selectedVal || 
+        s.name === selectedVal || 
+        (selectedName && s.name === selectedName)
+    );
 
     sectionSelect.innerHTML = '';
 
-    if (!subjectData || subjectData.sections.length === 0) {
-        // No sections for this subject — add a single "All" option
+    const validSections = (subjectData && subjectData.sections) 
+        ? subjectData.sections.filter(sec => sec && sec.trim()) 
+        : [];
+
+    if (validSections.length === 0) {
+        // No specific sections for this subject — add a single "(All sections)" option
         sectionSelect.innerHTML = '<option value="" selected>(All sections)</option>';
         return;
     }
 
-    subjectData.sections.forEach(sec => {
+    // If multiple sections exist, add an "(All sections)" option at top
+    if (validSections.length > 1) {
+        const allOpt = document.createElement('option');
+        allOpt.value = '';
+        allOpt.textContent = '(All sections)';
+        sectionSelect.appendChild(allOpt);
+    }
+
+    validSections.forEach(sec => {
         const opt = document.createElement('option');
-        opt.value = sec;
-        opt.textContent = sec;
+        opt.value = sec.trim();
+        opt.textContent = sec.trim();
         sectionSelect.appendChild(opt);
     });
+
+    if (validSections.length === 1) {
+        sectionSelect.selectedIndex = 0;
+    }
 });
 
 document.getElementById('add-repeat-btn').addEventListener('click', () => {
@@ -525,13 +548,13 @@ form.addEventListener('submit', async (e) => {
         // Repeat courses always live in the "BS Repeat Courses" batch.
         // The section from repeats.bin already includes discipline prefix (e.g. "CS-A", "AI/DS").
         for (const rc of repeatCourses) {
-            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS", "" -> "ALL"
-            const finalSectionPath = sectionSlug === "ALL" ? "" : sectionSlug;
+            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS", "" -> ""
+            const finalSectionPath = (sectionSlug === "ALL" || !sectionSlug) ? "" : sectionSlug;
             
-            let rcData = null;
-            if (sectionSlug) {
-                rcData = await fetchDecoded(`/data/schedules/BS_Repeat_Courses__${finalSectionPath}.bin`);
-            }
+            const repeatFileName = finalSectionPath 
+                ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
+                : `BS_Repeat_Courses__.bin`;
+            const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`);
 
             if (rcData && Array.isArray(rcData)) {
                 for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
