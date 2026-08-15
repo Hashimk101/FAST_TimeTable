@@ -116,11 +116,14 @@ def _grid_to_dataframe(row_data: list) -> DataFrame:
 
 
 def _find_header_row(df: DataFrame, first_col_value: str) -> int:
+    target = first_col_value.lower()
     for i, row in df.iterrows():
         # Remove batch tags for searching headers
         vals = [re.sub(r'\s*\[.*?\]', '', str(v)).strip() for v in row if str(v).strip()]
-        if vals and vals[0] == first_col_value:
-            return i
+        if vals:
+            first_val = vals[0].lower()
+            if first_val == target or first_val.startswith(target) or f"{target}/" in first_val or f"{target} /" in first_val:
+                return i
     raise ValueError(f"Header row with '{first_col_value}' not found")
 
 
@@ -149,7 +152,7 @@ def _extract_section(df: DataFrame, header_row_idx: int,
         # Check if the primary location matches separator to break
         primary_location_raw = str(row.iloc[location_col_indices[0]]) if location_col_indices else ""
         primary_location = re.sub(r'\s*\[.*?\]', '', primary_location_raw).strip()
-        if primary_location.lower() == separator.lower():
+        if primary_location.lower() == separator.lower() or primary_location.lower().startswith(separator.lower()):
             break
         if not primary_location or primary_location == "nan":
             continue
@@ -217,7 +220,7 @@ def sheets_to_classroom_df(row_data: list) -> DataFrame:
     room_header_idx = _find_header_row(df, "Room")
     header_row = df.iloc[room_header_idx]
     
-    room_indices = [idx for idx, val in enumerate(header_row) if re.sub(r'\s*\[.*?\]', '', str(val)).strip() == "Room"]
+    room_indices = [idx for idx, val in enumerate(header_row) if re.search(r'\broom\b', re.sub(r'\s*\[.*?\]', '', str(val)), re.IGNORECASE)]
     if not room_indices:
         room_indices = [0]
 
@@ -243,7 +246,7 @@ def sheets_to_lab_df(row_data: list) -> DataFrame:
     lab_header_idx = _find_header_row(df, "Lab")
     header_row = df.iloc[lab_header_idx]
     
-    lab_indices = [idx for idx, val in enumerate(header_row) if re.sub(r'\s*\[.*?\]', '', str(val)).strip() == "Lab"]
+    lab_indices = [idx for idx, val in enumerate(header_row) if re.search(r'\blab\b', re.sub(r'\s*\[.*?\]', '', str(val)), re.IGNORECASE)]
     if not lab_indices:
         lab_indices = [0]
 

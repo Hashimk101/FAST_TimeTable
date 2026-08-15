@@ -292,19 +292,20 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             if raw_subj.lower() in skip_words:
                 continue
 
-            # Extract Rescheduled/Cancelled status
-            status = None
-            status_match = re.search(r'\b(Rescheduled|ReSch|Cancelled|Reserved)\s*$', raw_subj, re.IGNORECASE)
-            if status_match:
-                status = status_match.group(1).strip()
-                entry['subject'] = raw_subj[:status_match.start()].strip()
-
-            # Extract batch from subject if present
+            # 1. Extract batch from subject if present (e.g. "Comp Net (CS-D) Cancelled [BS 24 CS]")
             batch = None
             match = re.search(r'\[(.*?)\]$', entry['subject'])
             if match:
                 batch = match.group(1).strip()
                 entry['subject'] = re.sub(r'\s*\[.*?\]$', '', entry['subject']).strip()
+
+            # 2. Extract Rescheduled/Cancelled/Reserved status now that [batch] tag is removed
+            status = None
+            status_match = re.search(r'[\s\-_\(\[]*\b(Rescheduled|ReSch|Cancelled|Reserved)\b[\s\-_\)\]]*$', entry['subject'], re.IGNORECASE)
+            if status_match:
+                raw_status = status_match.group(1).strip().capitalize()
+                status = 'Rescheduled' if raw_status.lower() == 'resch' else raw_status
+                entry['subject'] = entry['subject'][:status_match.start()].strip()
             # Case 1: Time is in the text (like Civics 02:00-03:45)
             if check_if_time_in_subject(entry['subject']):
                 subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
