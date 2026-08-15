@@ -90,34 +90,77 @@ def generate_static_data():
         print(f"Generated electives.bin ({len(electives)} electives)")
 
         # 4. Repeat subjects with sections
-        cursor.execute("ATTACH DATABASE ? AS uni", (COURSE_DB,))
-        cursor.execute("ATTACH DATABASE ? AS lab", (LAB_DB,))
+        # Source of truth: Actual schedules in uni_timetable.db and uni_timetable_lab.db
+        repeat_dict = {}
+        
+        # Load known metadata (ids, short_names) from subjects.db
+        subject_meta = {}
+        cursor.execute("SELECT id, name, short_name FROM subjects")
+        for sid, sname, short in cursor.fetchall():
+            if sname and sname.strip():
+                subject_meta[sname.strip().lower()] = {
+                    "id": sid, 
+                    "name": sname.strip(), 
+                    "short_name": (short or sname).strip()
+                }
+
+        # Also find any subjects explicitly mapped to repeat batch in subjects.db
         cursor.execute("""
-            SELECT DISTINCT s.id, s.name, s.short_name, t.SECTION
+            SELECT s.id, s.name, s.short_name
             FROM subjects s
             JOIN batch_subjects bs ON s.id = bs.subject_id
             JOIN batches b ON bs.batch_id = b.id
-            LEFT JOIN (
-                SELECT SUBJECT, BATCH, SECTION FROM uni.timetable
-                UNION
-                SELECT SUBJECT, BATCH, SECTION FROM lab.timetable
-            ) t ON t.SUBJECT = s.name AND t.BATCH = b.name
             WHERE b.name LIKE '%Repeat%'
-            ORDER BY s.name ASC, t.SECTION ASC
         """)
-        repeat_rows = cursor.fetchall()
-        cursor.execute("DETACH DATABASE uni")
-        cursor.execute("DETACH DATABASE lab")
-        
-        repeat_dict = {}
-        for r in repeat_rows:
-            sid, sname, short, section = r[0], r[1], r[2], r[3]
-            if sid not in repeat_dict:
-                repeat_dict[sid] = {"id": sid, "name": sname, "short_name": short, "sections": []}
-            if section is not None and section not in repeat_dict[sid]["sections"]:
-                repeat_dict[sid]["sections"].append(section)
-                
-        repeats = list(repeat_dict.values())
+        for sid, sname, short in cursor.fetchall():
+            if sname and sname.strip():
+                key = sname.strip().lower()
+                repeat_dict[key] = {
+                    "id": sid,
+                    "name": sname.strip(),
+                    "short_name": (short or sname).strip(),
+                    "sections": set()
+                }
+
+        # Extract actual repeat subjects and sections from both timetable databases
+        for db_path in [COURSE_DB, LAB_DB]:
+            if not os.path.exists(db_path):
+                continue
+            with sqlite3.connect(db_path) as t_conn:
+                t_cur = t_conn.cursor()
+                t_cur.execute("""
+                    SELECT DISTINCT SUBJECT, SECTION 
+                    FROM timetable 
+                    WHERE BATCH LIKE '%Repeat%' AND SUBJECT IS NOT NULL
+                """)
+                for sname, sec in t_cur.fetchall():
+                    sname_clean = (sname or '').strip()
+                    sec_clean = (sec or '').strip()
+                    if not sname_clean or sname_clean.lower() in {'room', 'lab', 'nil', 'none'}:
+                        continue
+                    
+                    key = sname_clean.lower()
+                    if key not in repeat_dict:
+                        meta = subject_meta.get(key, {})
+                        repeat_dict[key] = {
+                            "id": meta.get("id", len(repeat_dict) + 1000),
+                            "name": meta.get("name", sname_clean),
+                            "short_name": meta.get("short_name", sname_clean),
+                            "sections": set()
+                        }
+                    
+                    if sec_clean:
+                        repeat_dict[key]["sections"].add(sec_clean)
+
+        repeats = []
+        for item in sorted(repeat_dict.values(), key=lambda x: x["name"]):
+            repeats.append({
+                "id": item["id"],
+                "name": item["name"],
+                "short_name": item["short_name"],
+                "sections": sorted(list(item["sections"]))
+            })
+
         with open(os.path.join(OUTPUT_DIR, 'repeats.bin'), 'w') as f:
             f.write(encode_data(repeats))
         print(f"Generated repeats.bin ({len(repeats)} repeat subjects)")
