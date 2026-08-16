@@ -1861,7 +1861,7 @@ kbd {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.status-rescheduled, .status-resch {
+.status-rescheduled, .status-resch, .status-postponed {
   background: #f59e0b; /* Amber */
   color: #fff;
 }
