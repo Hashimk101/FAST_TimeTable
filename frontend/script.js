@@ -212,9 +212,10 @@ function decodeData(encodedStr) {
     }
 }
 
-async function fetchDecoded(url) {
+async function fetchDecoded(url, versionId = '') {
     try {
-        const res = await fetch(url + '?v=2');
+        const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
+        const res = await fetch(url + queryParam);
         if (!res.ok) return null;
         const text = await res.text();
         return decodeData(text);
@@ -498,6 +499,127 @@ form.addEventListener('submit', async (e) => {
         }
     }
 
+// === Timetable Builder & Sync System ===
+
+async function buildTimetableFromConfig(config, versionId = '') {
+    if (!config) return null;
+    const { batch, course, section, subjects = [], names = [], repeat_courses = [] } = config;
+    const exactBatch = (course && !batch.includes(course)) ? `${batch} ${course}`.trim() : batch;
+
+    let cosec = '';
+    if (course && section) {
+        cosec = section.startsWith(course + '-') ? section : `${course}-${section}`;
+    } else if (course) {
+        cosec = course;
+    } else if (section) {
+        cosec = section;
+    }
+
+    const primaryBatchSlug = sanitizeSlug(exactBatch);
+    const cosecSlug = sanitizeSlug(cosec);
+
+    const mergedTimetable = [[], [], [], [], [], []];
+
+    // 1. Fetch primary section schedule
+    const primaryFile = cosecSlug 
+        ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
+        : `/data/schedules/${primaryBatchSlug}__.bin`;
+    let primaryData = await fetchDecoded(primaryFile, versionId);
+    if (!primaryData) {
+        primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId);
+    }
+
+    if (primaryData && Array.isArray(primaryData)) {
+        for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+            const dayClasses = primaryData[dayIdx] || [];
+            const filtered = dayClasses.filter(c => subjects.includes(c.subject) || names.includes(c.subject));
+            mergedTimetable[dayIdx].push(...filtered);
+        }
+    }
+
+    // 2. Fetch repeat courses schedules
+    for (const rc of repeat_courses) {
+        const sectionSlug = sanitizeSlug(rc.section);
+        const finalSectionPath = (sectionSlug === "ALL" || !sectionSlug) ? "" : sectionSlug;
+        
+        const repeatFileName = finalSectionPath 
+            ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
+            : `BS_Repeat_Courses__.bin`;
+        const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId);
+
+        if (rcData && Array.isArray(rcData)) {
+            for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+                const dayClasses = rcData[dayIdx] || [];
+                const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
+                mergedTimetable[dayIdx].push(...filtered);
+            }
+        }
+    }
+
+    // 3. Sort each day's entries by start time
+    for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+        mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
+    }
+
+    return mergedTimetable;
+}
+
+let isSyncing = false;
+let lastVersionCheckTimestamp = 0;
+const VERSION_CHECK_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
+async function checkForTimetableUpdates(force = false) {
+    if (isSyncing) return;
+    const now = Date.now();
+    if (!force && (now - lastVersionCheckTimestamp < VERSION_CHECK_COOLDOWN_MS)) return;
+    
+    const cachedConfigStr = localStorage.getItem('cachedConfig');
+    if (!cachedConfigStr) return;
+
+    let config;
+    try {
+        config = JSON.parse(cachedConfigStr);
+    } catch {
+        return;
+    }
+
+    isSyncing = true;
+    lastVersionCheckTimestamp = now;
+
+    try {
+        const res = await fetch(`/data/version.json?t=${now}`, { cache: 'no-cache' });
+        if (!res.ok) return;
+        const versionData = await res.json();
+        const serverVersion = versionData?.version;
+        if (!serverVersion) return;
+
+        const localVersion = localStorage.getItem('cachedTimetableVersion');
+        if (localVersion && String(localVersion) === String(serverVersion)) {
+            return; // No updates needed
+        }
+
+        const updatedTimetable = await buildTimetableFromConfig(config, serverVersion);
+        if (!updatedTimetable) return;
+
+        const oldTimetableStr = localStorage.getItem('cachedTimetable');
+        const newTimetableStr = JSON.stringify(updatedTimetable);
+
+        localStorage.setItem('cachedTimetable', newTimetableStr);
+        localStorage.setItem('cachedTimetableVersion', String(serverVersion));
+
+        if (oldTimetableStr !== newTimetableStr) {
+            renderTimetable(updatedTimetable);
+            renderMobileView(updatedTimetable);
+            buildMobileWeekStrip();
+            updateMobileDateText();
+        }
+    } catch (err) {
+        console.warn('Background timetable sync check skipped:', err);
+    } finally {
+        isSyncing = false;
+    }
+}
+
     const btn = document.getElementById('generate-btn');
     btn.innerHTML = 'Generating...';
     btn.disabled = true;
@@ -511,84 +633,42 @@ form.addEventListener('submit', async (e) => {
     if (typeof showMobileSkeleton === 'function') showMobileSkeleton();
 
     try {
-        const exactBatch = course ? `${batch} ${course}`.trim() : batch;
-        
-        let cosec = '';
-        if (course && section) {
-            cosec = `${course}-${section}`;
-        } else if (course) {
-            cosec = course;
-        } else if (section) {
-            cosec = section;
-        }
-
-        const primaryBatchSlug = sanitizeSlug(exactBatch);
-        const cosecSlug = sanitizeSlug(cosec);
-
-        let mergedTimetable = [[], [], [], [], [], []];
-
-        // 1. Fetch primary section schedule
-        const primaryFile = cosecSlug 
-            ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
-            : `/data/schedules/${primaryBatchSlug}__.bin`;
-        let primaryData = await fetchDecoded(primaryFile);
-        if (!primaryData) {
-            primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`);
-        }
-
-        if (primaryData && Array.isArray(primaryData)) {
-            for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-                const dayClasses = primaryData[dayIdx] || [];
-                const filtered = dayClasses.filter(c => selectedSubjects.includes(c.subject) || selectedNames.includes(c.subject));
-                mergedTimetable[dayIdx].push(...filtered);
-            }
-        }
-
-        // 2. Fetch repeat courses schedules
-        // Repeat courses always live in the "BS Repeat Courses" batch.
-        // The section from repeats.bin already includes discipline prefix (e.g. "CS-A", "AI/DS").
-        for (const rc of repeatCourses) {
-            const sectionSlug = sanitizeSlug(rc.section); // e.g. "CS-A" -> "CS-A", "AI/DS" -> "AI_DS", "" -> ""
-            const finalSectionPath = (sectionSlug === "ALL" || !sectionSlug) ? "" : sectionSlug;
-            
-            const repeatFileName = finalSectionPath 
-                ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
-                : `BS_Repeat_Courses__.bin`;
-            const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`);
-
-            if (rcData && Array.isArray(rcData)) {
-                for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-                    const dayClasses = rcData[dayIdx] || [];
-                    const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
-                    mergedTimetable[dayIdx].push(...filtered);
-                }
-            }
-        }
-
-        // 3. Sort each day's entries by start time
-        for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-            mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
-        }
-
-        const data = {
-            status: 'success',
-            timetable: mergedTimetable
+        const currentConfig = {
+            batch,
+            course,
+            section,
+            subjects: selectedSubjects,
+            names: selectedNames,
+            repeat_courses: repeatCourses
         };
+
+        const mergedTimetable = await buildTimetableFromConfig(currentConfig);
         
-        if (data.status === 'success') {
-            lastConfig = { batch, course, section, subjects: selectedSubjects, names: selectedNames, repeat_courses: repeatCourses };
+        if (mergedTimetable) {
+            lastConfig = currentConfig;
             
             // Save preferences
             localStorage.setItem('batch', batch);
             localStorage.setItem('course', course);
             localStorage.setItem('section', section);
 
-            // Issue #4: Cache timetable for offline use
-            localStorage.setItem('cachedTimetable', JSON.stringify(data.timetable));
+            // Cache timetable & config for offline use
+            localStorage.setItem('cachedTimetable', JSON.stringify(mergedTimetable));
             localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
 
-            renderTimetable(data.timetable);
-            renderMobileView(data.timetable);
+            // Fetch and record latest version in background
+            fetch(`/data/version.json?t=${Date.now()}`, { cache: 'no-cache' })
+                .then(r => r.ok ? r.json() : null)
+                .then(v => {
+                    if (v?.version) {
+                        localStorage.setItem('cachedTimetableVersion', String(v.version));
+                        lastVersionCheckTimestamp = Date.now();
+                    }
+                })
+                .catch(() => {});
+
+            renderTimetable(mergedTimetable);
+            renderMobileView(mergedTimetable);
             
             // Combine names for status bar
             const allNames = [...selectedNames, ...repeatCourses.map(rc => rc.name)];
@@ -616,7 +696,7 @@ form.addEventListener('submit', async (e) => {
             step1.classList.add('active-step');
             
         } else {
-            showToast('Error: ' + data.message);
+            showToast('Failed to generate timetable data.');
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
@@ -685,10 +765,23 @@ window.addEventListener('DOMContentLoaded', () => {
         document.getElementById('empty-state').style.display = 'none';
         document.getElementById('week-grid').style.display = 'grid';
         closeModal();
+
+        // Check for updates in background (0ms delay to user)
+        checkForTimetableUpdates();
     } else {
         // Automatically open configure modal on first load
         openModal();
     }
+});
+
+// Re-check on tab focus / visibility change
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        checkForTimetableUpdates();
+    }
+});
+window.addEventListener('focus', () => {
+    checkForTimetableUpdates();
 });
 
 function getSubjectColor(subject) {
@@ -1310,13 +1403,14 @@ function renderMobileView(timetableData) {
 buildMobileWeekStrip();
 updateMobileDateText();
 
-// Refresh mobile view every minute to keep current/upcoming accurate
+// Refresh mobile view every minute to keep current/upcoming accurate & sync if sheet changed
 setInterval(() => {
     if (lastTimetableData) {
         renderMobileView(lastTimetableData);
         updateDesktopTimetableCurrentState();
     }
     updateMobileDateText();
+    checkForTimetableUpdates();
 }, 60000);
 
 

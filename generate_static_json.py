@@ -3,6 +3,8 @@ import json
 import base64
 import os
 import re
+import time
+from datetime import datetime, timezone
 
 SUBJECTS_DB = 'subjects.db'
 COURSE_DB = 'uni_timetable.db'
@@ -241,6 +243,16 @@ def generate_static_data():
         count += 1
 
     print(f"Successfully generated {count} schedule binary files in {schedules_dir}!")
+
+    # 6. Generate Version Manifest
+    version_info = {
+        "version": int(time.time()),
+        "updatedAt": datetime.now(timezone.utc).isoformat()
+    }
+    version_path = os.path.join(OUTPUT_DIR, 'version.json')
+    with open(version_path, 'w') as f:
+        json.dump(version_info, f, indent=2)
+    print(f"Generated version.json (v={version_info['version']})")
 
 if __name__ == '__main__':
     generate_static_data()
