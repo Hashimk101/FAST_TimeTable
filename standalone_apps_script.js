@@ -17,20 +17,18 @@ function checkForUpdates() {
     // Read the current data from the sheet (this works even on view-only sheets!)
     var spreadsheet = SpreadsheetApp.openById(SHEET_ID);
     
-    // We get a quick hash/checksum of the data to see if it changed
-    // Checking the last time it was updated is faster than reading all data
-    var currentDataString = "";
+    // Read all day sheets to catch any text edits across Monday-Saturday
     var sheets = spreadsheet.getSheets();
+    var allData = [];
     for (var i = 0; i < sheets.length; i++) {
-      // Get the last row and column as a quick signature of the sheet's state
-      currentDataString += sheets[i].getLastRow() + "-" + sheets[i].getLastColumn() + "|";
+      var sheetName = sheets[i].getName();
+      var data = sheets[i].getDataRange().getValues();
+      var flatData = data.map(function(row) { return row.join(","); }).join(";");
+      allData.push(sheetName + ":" + flatData);
     }
     
-    // For a deeper check, we read a few random cells or the whole first sheet's text
-    // (This guarantees we catch text edits inside cells)
-    var data = sheets[0].getDataRange().getValues();
-    var flatData = data.map(function(row) { return row.join(","); }).join(";");
-    var currentHash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, flatData));
+    var combinedData = allData.join("||");
+    var currentHash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, combinedData));
     
     // Check previous hash stored in properties
     var props = PropertiesService.getScriptProperties();
