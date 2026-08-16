@@ -742,7 +742,7 @@ function updateDesktopTimetableCurrentState() {
     const now = new Date();
     const currentDecimal = now.getHours() + now.getMinutes() / 60;
     const todayDow = now.getDay();
-    const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+    const todayTtIdx = (todayDow >= 1 && todayDow <= 6) ? todayDow - 1 : -1;
 
     document.querySelectorAll('.day-column').forEach((col, idx) => {
         if (idx === todayTtIdx) {
@@ -792,7 +792,7 @@ function renderTimetable(timetableData) {
         const now = new Date();
         const currentDecimal = now.getHours() + now.getMinutes() / 60;
         const todayDow = now.getDay();
-        const todayTtIdx = (todayDow >= 1 && todayDow <= 5) ? todayDow - 1 : -1;
+        const todayTtIdx = (todayDow >= 1 && todayDow <= 6) ? todayDow - 1 : -1;
         
         if (idx === todayTtIdx) {
             col.classList.add('day-column--today');
@@ -922,9 +922,9 @@ function buildMobileWeekStrip() {
 
     const today = new Date();
     const todayDow = today.getDay(); // 0=Sun...6=Sat
-    // Find this week's Monday
+    // Find this week's Monday (on Sunday, advance to next week's Monday)
     const monday = new Date(today);
-    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    const offset = todayDow === 0 ? 1 : 1 - todayDow;
     monday.setDate(today.getDate() + offset);
 
     const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -982,24 +982,21 @@ function updateMobileDateText(selectedIdx) {
     if (!el) return;
 
     const today = new Date();
+    const targetIdx = (selectedIdx !== undefined) ? selectedIdx : mobileSelectedDay;
 
-    if (selectedIdx === undefined || selectedIdx === null) {
+    if (targetIdx === null) {
         // Show today's date
-        const todayDow = today.getDay();
-        const isWeekend = todayDow === 0 || todayDow === 6;
-        if (isWeekend || mobileSelectedDay === null) {
-            el.textContent = today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-        }
+        el.textContent = today.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
         return;
     }
 
     // Calculate date for the selected weekday
     const todayDow = today.getDay();
     const monday = new Date(today);
-    const offset = todayDow === 0 ? -6 : 1 - todayDow;
+    const offset = todayDow === 0 ? 1 : 1 - todayDow;
     monday.setDate(today.getDate() + offset);
     const selectedDate = new Date(monday);
-    selectedDate.setDate(monday.getDate() + selectedIdx);
+    selectedDate.setDate(monday.getDate() + targetIdx);
 
     el.textContent = selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
 }
@@ -1149,7 +1146,7 @@ function renderMobileView(timetableData) {
 
         // Issue #12: Contextual empty state
         const isWeekend = ttIdx === -1;
-        const nextInfo = getNextClassInfo(timetableData, isWeekend ? 4 : ttIdx);
+        const nextInfo = getNextClassInfo(timetableData, isWeekend ? 5 : ttIdx);
 
         if (isWeekend) {
             emptyState.querySelector('h2').textContent = 'Enjoy your weekend!';
