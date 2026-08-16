@@ -135,6 +135,39 @@ def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -
 
     return timetable_list
 
+STATUS_PATTERN = re.compile(
+    r'[\s\-_\(\[]*\b(Cancell?ed|Cancel|Resch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Re-?sch(?:edul(?:ed|e))?|Reserved?|Postponed?)\b[\s\-_\)\]]*',
+    re.IGNORECASE
+)
+
+def extract_status(text: str) -> tuple:
+    """
+    Extract status keyword (Cancelled, Rescheduled, Reserved, Postponed) from text
+    and return (normalized_status, text_without_status).
+    """
+    match = STATUS_PATTERN.search(text)
+    if not match:
+        return None, text
+    raw = match.group(1).lower()
+    if raw.startswith('canc'):
+        status = 'Cancelled'
+    elif raw.startswith('resch') or raw.startswith('re-sch'):
+        status = 'Rescheduled'
+    elif raw.startswith('reserv'):
+        status = 'Reserved'
+    elif raw.startswith('postpon'):
+        status = 'Postponed'
+    else:
+        status = raw.capitalize()
+
+    start, end = match.span()
+    cleaned = (text[:start] + ' ' + text[end:]).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = re.sub(r'\(\s*\)', '', cleaned).strip()
+    if '(' in cleaned and ')' not in cleaned:
+        cleaned += ')'
+    return status, cleaned
+
 def clean_section(raw_section: str) -> str:
     '''
     Cleans the raw section string extracted from the Google Sheet.
@@ -160,8 +193,13 @@ def clean_section(raw_section: str) -> str:
     if in_room_match:
         section = section[:in_room_match.start()].strip()
 
-    # Remove ReSch / Cancelled / Reserved / "on for ..." suffixes
-    section = re.sub(r'\s+(ReSch|Cancelled|Reserved|on for .*)$', '', section, flags=re.IGNORECASE).strip()
+    # Remove ReSch / Cancelled / Reserved / Postponed / "on for ..." suffixes
+    section = re.sub(
+        r'\s+(Re-?sch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Cancell?ed|Cancel|Reserved?|Postponed?|on for .*)$',
+        '',
+        section,
+        flags=re.IGNORECASE
+    ).strip()
 
     # Remove "Audi ..." or venue info after the section code
     audi_match = re.search(r'\s+Audi\s', section)
@@ -299,13 +337,8 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
                 batch = match.group(1).strip()
                 entry['subject'] = re.sub(r'\s*\[.*?\]$', '', entry['subject']).strip()
 
-            # 2. Extract Rescheduled/Cancelled/Reserved status now that [batch] tag is removed
-            status = None
-            status_match = re.search(r'[\s\-_\(\[]*\b(Rescheduled|ReSch|Cancelled|Reserved)\b[\s\-_\)\]]*$', entry['subject'], re.IGNORECASE)
-            if status_match:
-                raw_status = status_match.group(1).strip().capitalize()
-                status = 'Rescheduled' if raw_status.lower() == 'resch' else raw_status
-                entry['subject'] = entry['subject'][:status_match.start()].strip()
+            # 2. Extract Rescheduled/Cancelled/Reserved/Postponed status now that [batch] tag is removed
+            status, entry['subject'] = extract_status(entry['subject'])
             # Case 1: Time is in the text (like Civics 02:00-03:45)
             if check_if_time_in_subject(entry['subject']):
                 subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
