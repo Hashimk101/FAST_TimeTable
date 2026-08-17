@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://fast-time-table-sable.vercel.app/sitemap.xml
