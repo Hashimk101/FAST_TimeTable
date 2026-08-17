@@ -192,15 +192,6 @@ document.querySelectorAll('.profile-card').forEach(card => {
     });
 });
 
-// Search Subjects
-const searchInput = document.getElementById('subject-search');
-searchInput.addEventListener('input', (e) => {
-    const text = e.target.value.toLowerCase();
-    document.querySelectorAll('#subject-list .subject-item').forEach(item => {
-        const name = item.querySelector('span').innerText.toLowerCase();
-        item.style.display = name.includes(text) ? 'flex' : 'none';
-    });
-});
 
 // === Binary Data Decoders ===
 function decodeData(encodedStr) {
