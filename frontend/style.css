@@ -1397,9 +1397,9 @@ kbd {
 }
 
 @keyframes m-pulse {
-  0% { box-shadow: 0 0 0 0 var(--m-accent-soft); }
-  70% { box-shadow: 0 0 0 10px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
 }
 
 .m-hero-card:active { transform: scale(0.985); }
