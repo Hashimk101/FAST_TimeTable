@@ -146,11 +146,13 @@ body {
 }
 
 .now-dot {
+  display: inline-block;
   width: 6px;
   height: 6px;
   background: #5CB85C;
   border-radius: 50%;
   animation: pulse-dot 2s ease-in-out infinite;
+  will-change: opacity;
 }
 
 @keyframes pulse-dot {
@@ -1366,7 +1368,7 @@ kbd {
   max-width: 40px;
 }
 
-.m-now-pulse { display: inline-block; width: 5px; height: 5px; background: var(--m-accent); border-radius: 50%; margin-right: 6px; animation: m-blink 2s infinite; }
+.m-now-pulse { display: inline-block; width: 5px; height: 5px; background: var(--m-accent); border-radius: 50%; margin-right: 6px; animation: m-blink 2s infinite; will-change: opacity; }
 
 .m-now-label {
   font-size: 0.6rem;
@@ -1394,6 +1396,7 @@ kbd {
   opacity: 1;
   box-sizing: border-box;
   animation: m-pulse 2s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
+  will-change: transform, opacity;
 }
 
 @keyframes m-pulse {
@@ -1444,10 +1447,12 @@ kbd {
 }
 
 .m-pulse-dot {
+  display: inline-block;
   width: 7px; height: 7px;
   background: #D44040;
   border-radius: 50%;
   animation: m-blink 1.6s infinite ease-in-out;
+  will-change: opacity;
 }
 
 [data-theme="dark"] .m-pulse-dot { background: #E86060; }
