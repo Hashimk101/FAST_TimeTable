@@ -1051,19 +1051,10 @@ function buildMobileWeekStrip() {
             const timeline = document.getElementById('mobile-timeline');
             if (timeline) {
                 timeline.scrollTo({ top: 0, behavior: 'smooth' });
-                timeline.style.transition = 'opacity 0.12s ease-out';
-                timeline.style.opacity = '0';
-                setTimeout(() => {
-                    buildMobileWeekStrip();
-                    updateMobileDateText(dayIndex);
-                    if (lastTimetableData) renderMobileView(lastTimetableData);
-                    timeline.style.opacity = '1';
-                }, 120);
-            } else {
-                buildMobileWeekStrip();
-                updateMobileDateText(dayIndex);
-                if (lastTimetableData) renderMobileView(lastTimetableData);
             }
+            buildMobileWeekStrip();
+            updateMobileDateText(dayIndex);
+            if (lastTimetableData) renderMobileView(lastTimetableData);
         });
         strip.appendChild(el);
     }
@@ -1137,19 +1128,10 @@ document.getElementById('mobile-timeline')?.addEventListener('touchend', (e) => 
     const timeline = document.getElementById('mobile-timeline');
     if (timeline) {
         timeline.scrollTo({ top: 0 });
-        timeline.style.transition = 'opacity 0.12s ease-out';
-        timeline.style.opacity = '0';
-        setTimeout(() => {
-            buildMobileWeekStrip();
-            updateMobileDateText(mobileSelectedDay);
-            if (lastTimetableData) renderMobileView(lastTimetableData);
-            timeline.style.opacity = '1';
-        }, 120);
-    } else {
-        buildMobileWeekStrip();
-        updateMobileDateText(mobileSelectedDay);
-        if (lastTimetableData) renderMobileView(lastTimetableData);
     }
+    buildMobileWeekStrip();
+    updateMobileDateText(mobileSelectedDay);
+    if (lastTimetableData) renderMobileView(lastTimetableData);
 }, { passive: true });
 
 // === Issue #12: Contextual empty states ===
