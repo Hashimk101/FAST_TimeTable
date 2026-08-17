@@ -76,7 +76,10 @@ function openModal() {
     modal.classList.add('active');
     // Focus trap: move focus into modal
     const firstInput = modal.querySelector('select, input, button');
-    if (firstInput) setTimeout(() => firstInput.focus(), 200);
+    if (firstInput) {
+        // Prevent scroll avoids breaking the slide-up animation
+        firstInput.focus({ preventScroll: true });
+    }
 }
 
 function closeModal() {
