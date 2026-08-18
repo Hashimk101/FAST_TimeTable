@@ -227,9 +227,36 @@ def generate_static_data():
                             "status": row[4]
                         })
 
+            # Merge entries with exact same start_time, end_time, subject, status (e.g. concurrent lab subsections)
+            merged_dict = {}
+            for entry in day_entries:
+                key = (entry["start_time"], entry["end_time"], entry["subject"], entry["status"])
+                if key not in merged_dict:
+                    merged_dict[key] = {
+                        "start_time": entry["start_time"],
+                        "end_time": entry["end_time"],
+                        "subject": entry["subject"],
+                        "locations": [entry["location"]] if entry.get("location") else [],
+                        "status": entry["status"]
+                    }
+                else:
+                    if entry.get("location") and entry["location"] not in merged_dict[key]["locations"]:
+                        merged_dict[key]["locations"].append(entry["location"])
+
+            merged_entries = []
+            for item in merged_dict.values():
+                loc_str = " | ".join(item["locations"]) if item["locations"] else ""
+                merged_entries.append({
+                    "start_time": item["start_time"],
+                    "end_time": item["end_time"],
+                    "subject": item["subject"],
+                    "location": loc_str,
+                    "status": item["status"]
+                })
+
             # Sort by start_time
-            day_entries.sort(key=lambda x: parse_time(x["start_time"]))
-            timetable_5days.append(day_entries)
+            merged_entries.sort(key=lambda x: parse_time(x["start_time"]))
+            timetable_5days.append(merged_entries)
 
         # File naming convention:
         # e.g., batch_val = "BS 25 CS", section_val = "CS-A" -> "BS_25_CS__CS-A.bin"
@@ -238,7 +265,7 @@ def generate_static_data():
         file_name = f"{batch_slug}__{section_slug}.bin"
         file_path = os.path.join(schedules_dir, file_name)
 
-        with open(file_path, 'w') as f:
+        with open(file_path, 'w', encoding='utf-8') as f:
             f.write(encode_data(timetable_5days))
         count += 1
 
@@ -250,7 +277,7 @@ def generate_static_data():
         "updatedAt": datetime.now(timezone.utc).isoformat()
     }
     version_path = os.path.join(OUTPUT_DIR, 'version.json')
-    with open(version_path, 'w') as f:
+    with open(version_path, 'w', encoding='utf-8') as f:
         json.dump(version_info, f, indent=2)
     print(f"Generated version.json (v={version_info['version']})")
 
