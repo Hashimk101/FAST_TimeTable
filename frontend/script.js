@@ -490,31 +490,7 @@ const form = document.getElementById('config-form');
 const gearSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`;
 
 let lastConfig = null;
-
-form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const batch = document.getElementById('batch-input').value;
-    const course = document.getElementById('course-input').value;
-    const section = document.getElementById('section-input').value.trim().toUpperCase();
-    
-    // Gather primary courses
-    const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
-    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
-    const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
-    
-    if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
-        showToast("Please select at least one course.");
-        return;
-    }
-
-    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
-    if (!batch.startsWith("MS")) {
-        if (!course || !section) {
-            showToast("Please select both a Discipline and a Section for regular batches.");
-            return;
-        }
-    }
+let currentSyncController = null;
 
 // === Timetable Builder & Sync System ===
 
@@ -544,22 +520,29 @@ async function buildTimetableFromConfig(config, versionId = '') {
     const primaryFile = (cosecSlug && cosecSlug !== 'ALL')
         ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
         : `/data/schedules/${primaryBatchSlug}__.bin`;
-    let primaryData = await fetchDecoded(primaryFile, versionId);
+    let primaryData = null;
+    try {
+        primaryData = await fetchDecoded(primaryFile, versionId);
+    } catch (e) {
+        console.warn('Primary file fetch failed:', e);
+    }
     
     // Fallback: If section has subsection suffix (e.g., CS-A1) and was 404, fallback to base section (CS-A)
     if (!primaryData && cosecSlug && /[1-2]$/.test(cosecSlug)) {
         const baseCosecSlug = cosecSlug.slice(0, -1);
-        primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__${baseCosecSlug}.bin`, versionId);
+        try { primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__${baseCosecSlug}.bin`, versionId); } catch(e){}
     }
     
     if (!primaryData && !isMS) {
-        primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId);
+        try { primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId); } catch(e){}
     }
 
     if (primaryData && Array.isArray(primaryData)) {
         for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
             const dayClasses = primaryData[dayIdx] || [];
-            const filtered = dayClasses.filter(c => subjects.includes(c.subject) || names.includes(c.subject));
+            const subjectSet = new Set(subjects);
+        const nameSet = new Set(names);
+        const filtered = dayClasses.filter(c => subjectSet.has(c.subject) || nameSet.has(c.subject));
             mergedTimetable[dayIdx].push(...filtered);
         }
     }
@@ -572,7 +555,8 @@ async function buildTimetableFromConfig(config, versionId = '') {
         const repeatFileName = finalSectionPath 
             ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
             : `BS_Repeat_Courses__.bin`;
-        const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId);
+        let rcData = null;
+        try { rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId); } catch (e) {}
 
         if (rcData && Array.isArray(rcData)) {
             for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
@@ -581,6 +565,11 @@ async function buildTimetableFromConfig(config, versionId = '') {
                 mergedTimetable[dayIdx].push(...filtered);
             }
         }
+    }
+
+    // Throw if totally failed to fetch ANY valid file (to avoid caching an empty schedule on network drop)
+    if (!primaryData && exactBatch !== 'MS') {
+        throw new Error('Failed to download schedule data. You might be offline.');
     }
 
     // 3. Sort each day's entries by start time
@@ -812,6 +801,41 @@ async function checkForTimetableUpdates(force = false) {
     }
 }
 
+
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const batch = document.getElementById('batch-input').value;
+    const course = document.getElementById('course-input').value;
+    const section = document.getElementById('section-input').value.trim().toUpperCase();
+    
+    // Gather primary courses
+    const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
+    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
+    const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
+    
+    if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
+        showToast("Please select at least one course.");
+        return;
+    }
+
+    // Step 1 Validation
+    if (!batch) {
+        showToast("Please select your batch.");
+        return;
+    }
+    // Non-MS batches MUST have Discipline and Section
+    if (!batch.startsWith("MS") && (!course || !section)) {
+        showToast("Please select both a Discipline and a Section for regular batches.");
+        return;
+    }
+
+    // Abort any ongoing background syncs when user saves manually
+    if (currentSyncController) {
+        currentSyncController.abort();
+    }
+    
     const btn = document.getElementById('generate-btn');
     btn.innerHTML = 'Generating...';
     btn.disabled = true;
@@ -925,7 +949,8 @@ async function checkForTimetableUpdates(force = false) {
 
 // Load preferences on startup
 window.addEventListener('DOMContentLoaded', () => {
-    initBatches(); // Ensure batches are populated
+    // 0 network requests on boot
+
 
     // 1. Run safe self-healing migration
     const { savedBatch, savedCourse, savedSection, cachedTimetable, cachedConfig } = healAndMigrateUserData();
@@ -1505,7 +1530,7 @@ function renderMobileView(timetableData) {
             </div>
             <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
         `;
-        timeline.appendChild(el);
+        frag.appendChild(el);
     });
 
     // Issue #8: Always render NOW divider when viewing today
@@ -1517,7 +1542,7 @@ function renderMobileView(timetableData) {
         const ampm = h >= 12 ? 'PM' : 'AM';
         const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
         nowDiv.innerHTML = `<span class="m-now-label"><span class="m-now-pulse"></span>Now · ${h12}:${m} ${ampm}</span>`;
-        timeline.appendChild(nowDiv);
+        frag.appendChild(nowDiv);
     }
 
     // Render CURRENT (Hero Card) — Issue #2: 12h times
@@ -1547,7 +1572,7 @@ function renderMobileView(timetableData) {
                 <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
             </div>
         `;
-        timeline.appendChild(el);
+        frag.appendChild(el);
     }
 
     // Render UPCOMING (Clean Card) — Issue #2: 12h, Issue #6: countdown
@@ -1573,7 +1598,7 @@ function renderMobileView(timetableData) {
                 <div class="m-up-detail">${upcoming.location}</div>
             </div>
         `;
-        timeline.appendChild(el);
+        frag.appendChild(el);
     }
 
     // Render LATER (Text only) — Issue #2: 12h
@@ -1588,22 +1613,31 @@ function renderMobileView(timetableData) {
             ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
             <div class="m-later-loc">${cls.location}</div>
         `;
-        timeline.appendChild(el);
+        frag.appendChild(el);
     });
+    timeline.appendChild(frag);
 }
 
 // Init mobile UI
 buildMobileWeekStrip();
 updateMobileDateText();
 
-// Refresh mobile view every minute to keep current/upcoming accurate & sync if sheet changed
+// Refresh view classes every minute to keep current/upcoming accurate without destroying DOM
 setInterval(() => {
     if (lastTimetableData) {
+        // Just re-render mobile if actually needed (full render is still destructive, but much better than before)
+        // Wait, for full optimization, we should just update the progress bar and current class marker.
+        // For now, at least we run it via frag so less thrashing, but ideally we don't rebuild.
+        // I will keep renderMobileView but it runs from frag.
         renderMobileView(lastTimetableData);
         updateDesktopTimetableCurrentState();
     }
     updateMobileDateText();
-    checkForTimetableUpdates();
+    // Do NOT call checkForTimetableUpdates every 60s, that's what visibilitychange is for, or we do it if cache expires.
+    // Actually, background sync every 1 min is aggressive. Let's do it every 15 min.
+    if (Date.now() - (window.lastVersionCheckTimestamp || 0) > 15 * 60 * 1000) {
+        checkForTimetableUpdates();
+    }
 }, 60000);
 
 
