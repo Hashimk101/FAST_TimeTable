@@ -365,6 +365,21 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             if not entry.get('section') and not batch:
                 batch = 'BS Repeat Courses'
 
+            # --- SUBSECTION HANDLING ---
+            # Extract trailing 1 or 2 from sections (e.g., CS-A1 -> CS-A)
+            # Append this detail to the location (e.g., "Kybher-3 (Part 1)")
+            # This allows both subsections to appear simultaneously under "CS-A", letting students decide.
+            if entry.get('section'):
+                sub_match = re.match(r'^([A-Z/]+-[A-Z])([1-2])(\s*,.*)?$', entry['section'])
+                if sub_match:
+                    base_section = sub_match.group(1) + (sub_match.group(3) or "")
+                    subsection_id = sub_match.group(2)
+                    entry['section'] = base_section
+                    if entry.get('location'):
+                        entry['location'] = f"{entry['location']} (Part {subsection_id})"
+                    else:
+                        entry['location'] = f"(Part {subsection_id})"
+
             # ... rest of the insertion code ...
             crsr.execute(f'''
                 INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
