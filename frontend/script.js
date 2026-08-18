@@ -80,7 +80,6 @@ function openModal() {
         // Prevent scroll avoids breaking the slide-up animation
         firstInput.focus({ preventScroll: true });
     }
-    initBatches(); // Lazy load the batch options here
 }
 
 function closeModal() {
@@ -194,30 +193,7 @@ document.querySelectorAll('.profile-card').forEach(card => {
 });
 
 
-// === Safe JSON & Binary Data Decoders ===
-function safeJsonParse(str, fallback = null) {
-    if (!str || typeof str !== 'string') return fallback;
-    try {
-        return JSON.parse(str);
-    } catch (e) {
-        console.warn("Corrupted JSON encountered. Using fallback.", e);
-        return fallback;
-    }
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(timer);
-        return res;
-    } catch (err) {
-        clearTimeout(timer);
-        throw err;
-    }
-}
-
+// === Binary Data Decoders ===
 function decodeData(encodedStr) {
     try {
         if (!encodedStr) return null;
@@ -230,28 +206,16 @@ function decodeData(encodedStr) {
     }
 }
 
-window.sessionCache = {};
 async function fetchDecoded(url, versionId = '') {
-    const cacheKey = versionId ? `${url}?v=${encodeURIComponent(versionId)}` : url;
-    
-    if (window.sessionCache[cacheKey]) {
-        return window.sessionCache[cacheKey];
-    }
-
     try {
-        const res = await fetchWithTimeout(cacheKey, { cache: 'default' }, 8000);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
+        const res = await fetch(url + queryParam);
+        if (!res.ok) return null;
         const text = await res.text();
-        const data = decodeData(text);
-        
-        if (url.includes('batches.bin') || url.includes('subjects.bin') || url.includes('electives.bin') || url.includes('repeats.bin')) {
-            window.sessionCache[cacheKey] = data;
-        }
-        
-        return data;
+        return decodeData(text);
     } catch (e) {
         console.warn(`Could not load ${url}`, e);
-        throw e; // Throw so that buildTimetableFromConfig catches it instead of silently returning null!
+        return null;
     }
 }
 
@@ -503,318 +467,6 @@ const form = document.getElementById('config-form');
 const gearSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`;
 
 let lastConfig = null;
-let currentSyncController = null;
-
-// === Timetable Builder & Sync System ===
-
-async function buildTimetableFromConfig(config, versionId = '') {
-    if (!config) return null;
-    const { batch = '', course = '', section = '', subjects = [], names = [], repeat_courses = [] } = config;
-    const isMS = batch.startsWith('MS');
-    const exactBatch = (course && !batch.includes(course)) ? `${batch} ${course}`.trim() : batch;
-
-    let cosec = '';
-    if (!isMS) {
-        if (course && section) {
-            cosec = section.startsWith(course + '-') ? section : `${course}-${section}`;
-        } else if (course) {
-            cosec = course;
-        } else if (section) {
-            cosec = section;
-        }
-    }
-
-    const primaryBatchSlug = sanitizeSlug(exactBatch);
-    const cosecSlug = sanitizeSlug(cosec);
-
-    const mergedTimetable = [[], [], [], [], [], []];
-
-    // 1. Fetch primary section schedule
-    const primaryFile = (cosecSlug && cosecSlug !== 'ALL')
-        ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
-        : `/data/schedules/${primaryBatchSlug}__.bin`;
-    let primaryData = null;
-    try {
-        primaryData = await fetchDecoded(primaryFile, versionId);
-    } catch (e) {
-        console.warn('Primary file fetch failed:', e);
-    }
-    
-    // Fallback: If section has subsection suffix (e.g., CS-A1) and was 404, fallback to base section (CS-A)
-    if (!primaryData && cosecSlug && /[1-2]$/.test(cosecSlug)) {
-        const baseCosecSlug = cosecSlug.slice(0, -1);
-        try { primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__${baseCosecSlug}.bin`, versionId); } catch(e){}
-    }
-    
-    if (!primaryData && !isMS) {
-        try { primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId); } catch(e){}
-    }
-
-    if (primaryData && Array.isArray(primaryData)) {
-        for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-            const dayClasses = primaryData[dayIdx] || [];
-            const subjectSet = new Set(subjects);
-        const nameSet = new Set(names);
-        const filtered = dayClasses.filter(c => subjectSet.has(c.subject) || nameSet.has(c.subject));
-            mergedTimetable[dayIdx].push(...filtered);
-        }
-    }
-
-    // 2. Fetch repeat courses schedules
-    for (const rc of repeat_courses) {
-        const sectionSlug = sanitizeSlug(rc.section);
-        const finalSectionPath = (sectionSlug === "ALL" || !sectionSlug) ? "" : sectionSlug;
-        
-        const repeatFileName = finalSectionPath 
-            ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
-            : `BS_Repeat_Courses__.bin`;
-        let rcData = null;
-        try { rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId); } catch (e) {}
-
-        if (rcData && Array.isArray(rcData)) {
-            for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-                const dayClasses = rcData[dayIdx] || [];
-                const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
-                mergedTimetable[dayIdx].push(...filtered);
-            }
-        }
-    }
-
-    // Throw if totally failed to fetch ANY valid file (to avoid caching an empty schedule on network drop)
-    if (!primaryData && exactBatch !== 'MS') {
-        throw new Error('Failed to download schedule data. You might be offline.');
-    }
-
-    // 3. Sort each day's entries by start time
-    for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
-        mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
-    }
-
-    return mergedTimetable;
-}
-
-// === Legacy Storage Migration & Self-Healing ===
-function healAndMigrateUserData() {
-    let savedBatch = localStorage.getItem('batch') || '';
-    let savedCourse = localStorage.getItem('course') || '';
-    let savedSection = localStorage.getItem('section') || '';
-
-    let cachedTimetable = safeJsonParse(localStorage.getItem('cachedTimetable'));
-    let cachedConfig = safeJsonParse(localStorage.getItem('cachedConfig'));
-
-    // 1. Normalize Batch (e.g. "BS 25 CS" -> "BS 25", course: "CS")
-    if (savedBatch.startsWith("BS ") && savedBatch.split(' ').length >= 3) {
-        const parts = savedBatch.split(' ');
-        savedBatch = parts.slice(0, 2).join(' '); // "BS 25"
-        if (!savedCourse && parts[2]) {
-            savedCourse = parts[2].toUpperCase();
-        }
-        localStorage.setItem('batch', savedBatch);
-        if (savedCourse) localStorage.setItem('course', savedCourse);
-    } else if (savedBatch.startsWith("MS")) {
-        savedBatch = "MS";
-        localStorage.setItem('batch', savedBatch);
-    }
-
-    // 2. Normalize Section (e.g. "CS-A", "Section A", "CS-A1", "A1" -> "A")
-    if (savedSection) {
-        let cleanSec = savedSection.trim().toUpperCase().replace(/^SECTION\s+/i, '');
-        if (cleanSec.includes('-')) {
-            cleanSec = cleanSec.split('-')[1] || cleanSec;
-        }
-        const subMatch = cleanSec.match(/^([A-Z])\d$/);
-        if (subMatch) cleanSec = subMatch[1];
-        
-        savedSection = cleanSec;
-        localStorage.setItem('section', savedSection);
-    }
-
-    // 3. Ensure cachedTimetable has 6 full day arrays with sanitized items
-    if (Array.isArray(cachedTimetable)) {
-        while (cachedTimetable.length < 6) {
-            cachedTimetable.push([]);
-        }
-        cachedTimetable = cachedTimetable.map(dayClasses => {
-            if (!Array.isArray(dayClasses)) return [];
-            return dayClasses.map(cls => ({
-                start_time: cls.start_time || "08:00",
-                end_time: cls.end_time || "09:00",
-                subject: cls.subject || "Unknown",
-                location: cls.location || "TBD",
-                status: cls.status || null
-            }));
-        });
-        localStorage.setItem('cachedTimetable', JSON.stringify(cachedTimetable));
-    } else {
-        cachedTimetable = null;
-    }
-
-    // 4. Reconstruct missing cachedConfig if cachedTimetable exists
-    if (!cachedConfig && cachedTimetable && (savedBatch || savedCourse)) {
-        const extractedSubjects = Array.from(new Set(
-            cachedTimetable.flat().map(c => c.subject).filter(Boolean)
-        ));
-
-        if (extractedSubjects.length > 0) {
-            cachedConfig = {
-                batch: savedBatch,
-                course: savedCourse || "CS",
-                section: savedSection || "A",
-                subjects: extractedSubjects,
-                names: extractedSubjects,
-                repeat_courses: []
-            };
-            localStorage.setItem('cachedConfig', JSON.stringify(cachedConfig));
-        }
-    }
-
-    // 5. Heal repeat_courses schema inside cachedConfig
-    if (cachedConfig) {
-        let changed = false;
-        if (!cachedConfig.batch && savedBatch) { cachedConfig.batch = savedBatch; changed = true; }
-        if (!cachedConfig.course && savedCourse) { cachedConfig.course = savedCourse; changed = true; }
-        if (!cachedConfig.section && savedSection) { cachedConfig.section = savedSection; changed = true; }
-        if (!Array.isArray(cachedConfig.subjects)) { cachedConfig.subjects = []; changed = true; }
-        if (!Array.isArray(cachedConfig.names)) { cachedConfig.names = [...cachedConfig.subjects]; changed = true; }
-        
-        if (Array.isArray(cachedConfig.repeat_courses)) {
-            cachedConfig.repeat_courses = cachedConfig.repeat_courses.map(rc => {
-                const subj = rc.subject || rc.name || '';
-                const name = rc.name || rc.subject || subj;
-                let sec = rc.section || (rc.course && rc.section ? `${rc.course}-${rc.section}` : '');
-                if (sec && !sec.includes('-') && rc.course) sec = `${rc.course}-${sec}`;
-                return {
-                    subject: subj,
-                    name: name,
-                    section: sec,
-                    displaySection: sec || '(all)'
-                };
-            });
-            changed = true;
-        } else {
-            cachedConfig.repeat_courses = [];
-            changed = true;
-        }
-
-        if (changed) {
-            localStorage.setItem('cachedConfig', JSON.stringify(cachedConfig));
-        }
-    }
-
-    return { savedBatch, savedCourse, savedSection, cachedTimetable, cachedConfig };
-}
-
-// === Semantic Diff Engine ===
-function computeScheduleDiff(oldTt, newTt) {
-    if (!oldTt || !Array.isArray(oldTt)) return { hasChanges: true, changes: [] };
-    const changes = [];
-    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-    for (let d = 0; d < 6; d++) {
-        const oldDay = oldTt[d] || [];
-        const newDay = newTt[d] || [];
-
-        newDay.forEach(nc => {
-            const match = oldDay.find(oc => oc.subject === nc.subject && oc.start_time === nc.start_time);
-            if (!match) {
-                changes.push(`Added ${nc.subject} (${days[d]})`);
-            } else {
-                if (match.location !== nc.location) {
-                    changes.push(`${nc.subject} room: ${nc.location}`);
-                }
-                if (match.status !== nc.status) {
-                    changes.push(`${nc.subject} status: ${nc.status || 'Active'}`);
-                }
-            }
-        });
-
-        oldDay.forEach(oc => {
-            const stillExists = newDay.some(nc => nc.subject === oc.subject && nc.start_time === oc.start_time);
-            if (!stillExists) {
-                changes.push(`Cancelled/Removed: ${oc.subject} (${days[d]})`);
-            }
-        });
-    }
-
-    return { hasChanges: changes.length > 0, changes };
-}
-
-let isSyncing = false;
-let lastVersionCheckTimestamp = 0;
-const VERSION_CHECK_COOLDOWN_MS = 60 * 1000; // 1 minute cooldown
-
-async function checkForTimetableUpdates(force = false) {
-    if (isSyncing) return;
-    if (!navigator.onLine) {
-        const banner = document.getElementById('offline-banner');
-        if (banner) banner.style.display = 'flex';
-        return;
-    }
-
-    const now = Date.now();
-    if (!force && (now - lastVersionCheckTimestamp < VERSION_CHECK_COOLDOWN_MS)) return;
-    
-    let config = safeJsonParse(localStorage.getItem('cachedConfig'));
-    if (!config) {
-        const healed = healAndMigrateUserData();
-        config = healed.cachedConfig;
-    }
-    if (!config) return;
-
-    isSyncing = true;
-
-    try {
-        const res = await fetchWithTimeout(`/data/version.json?_t=${now}`, { cache: 'no-store' }, 5000);
-        if (!res.ok) return;
-        const versionData = await res.json();
-        const serverVersion = versionData?.version;
-        if (!serverVersion) return;
-
-        lastVersionCheckTimestamp = Date.now();
-
-        const localVersion = localStorage.getItem('cachedTimetableVersion');
-        if (!force && localVersion && String(localVersion) === String(serverVersion)) {
-            return; // Already up to date
-        }
-
-        const updatedTimetable = await buildTimetableFromConfig(config, serverVersion);
-        if (!updatedTimetable || !Array.isArray(updatedTimetable)) return;
-        
-        // Atomic Guard: Never overwrite with an empty schedule if user has classes
-        const totalClasses = updatedTimetable.reduce((acc, day) => acc + (Array.isArray(day) ? day.length : 0), 0);
-        if (totalClasses === 0 && config.subjects && config.subjects.length > 0) {
-            console.warn("Sync returned 0 classes unexpectedly. Aborting commit to prevent data loss.");
-            return;
-        }
-
-        const oldTimetable = safeJsonParse(localStorage.getItem('cachedTimetable'));
-        const oldTimetableStr = localStorage.getItem('cachedTimetable');
-        const newTimetableStr = JSON.stringify(updatedTimetable);
-
-        localStorage.setItem('cachedTimetable', newTimetableStr);
-        localStorage.setItem('cachedTimetableVersion', String(serverVersion));
-
-        if (oldTimetableStr !== newTimetableStr) {
-            renderTimetable(updatedTimetable);
-            renderMobileView(updatedTimetable);
-            buildMobileWeekStrip();
-            updateMobileDateText();
-
-            // Semantic diff toast
-            const diff = computeScheduleDiff(oldTimetable, updatedTimetable);
-            if (diff.changes.length > 0) {
-                const msg = diff.changes.length === 1 ? diff.changes[0] : `Schedule updated (${diff.changes.length} changes)`;
-                showToast(msg, 'info', 4000);
-            }
-        }
-    } catch (err) {
-        console.warn('Background timetable sync check skipped:', err);
-    } finally {
-        isSyncing = false;
-    }
-}
-
-
 
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -833,22 +485,135 @@ form.addEventListener('submit', async (e) => {
         return;
     }
 
-    // Step 1 Validation
-    if (!batch) {
-        showToast("Please select your batch.");
-        return;
+    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
+    if (!batch.startsWith("MS")) {
+        if (!course || !section) {
+            showToast("Please select both a Discipline and a Section for regular batches.");
+            return;
+        }
     }
-    // Non-MS batches MUST have Discipline and Section
-    if (!batch.startsWith("MS") && (!course || !section)) {
-        showToast("Please select both a Discipline and a Section for regular batches.");
+
+// === Timetable Builder & Sync System ===
+
+async function buildTimetableFromConfig(config, versionId = '') {
+    if (!config) return null;
+    const { batch, course, section, subjects = [], names = [], repeat_courses = [] } = config;
+    const exactBatch = (course && !batch.includes(course)) ? `${batch} ${course}`.trim() : batch;
+
+    let cosec = '';
+    if (course && section) {
+        cosec = section.startsWith(course + '-') ? section : `${course}-${section}`;
+    } else if (course) {
+        cosec = course;
+    } else if (section) {
+        cosec = section;
+    }
+
+    const primaryBatchSlug = sanitizeSlug(exactBatch);
+    const cosecSlug = sanitizeSlug(cosec);
+
+    const mergedTimetable = [[], [], [], [], [], []];
+
+    // 1. Fetch primary section schedule
+    const primaryFile = cosecSlug 
+        ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
+        : `/data/schedules/${primaryBatchSlug}__.bin`;
+    let primaryData = await fetchDecoded(primaryFile, versionId);
+    if (!primaryData) {
+        primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId);
+    }
+
+    if (primaryData && Array.isArray(primaryData)) {
+        for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+            const dayClasses = primaryData[dayIdx] || [];
+            const filtered = dayClasses.filter(c => subjects.includes(c.subject) || names.includes(c.subject));
+            mergedTimetable[dayIdx].push(...filtered);
+        }
+    }
+
+    // 2. Fetch repeat courses schedules
+    for (const rc of repeat_courses) {
+        const sectionSlug = sanitizeSlug(rc.section);
+        const finalSectionPath = (sectionSlug === "ALL" || !sectionSlug) ? "" : sectionSlug;
+        
+        const repeatFileName = finalSectionPath 
+            ? `BS_Repeat_Courses__${finalSectionPath}.bin` 
+            : `BS_Repeat_Courses__.bin`;
+        const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId);
+
+        if (rcData && Array.isArray(rcData)) {
+            for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+                const dayClasses = rcData[dayIdx] || [];
+                const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
+                mergedTimetable[dayIdx].push(...filtered);
+            }
+        }
+    }
+
+    // 3. Sort each day's entries by start time
+    for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
+        mergedTimetable[dayIdx].sort((a, b) => parseTimeMinutes(a.start_time) - parseTimeMinutes(b.start_time));
+    }
+
+    return mergedTimetable;
+}
+
+let isSyncing = false;
+let lastVersionCheckTimestamp = 0;
+const VERSION_CHECK_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
+async function checkForTimetableUpdates(force = false) {
+    if (isSyncing) return;
+    const now = Date.now();
+    if (!force && (now - lastVersionCheckTimestamp < VERSION_CHECK_COOLDOWN_MS)) return;
+    
+    const cachedConfigStr = localStorage.getItem('cachedConfig');
+    if (!cachedConfigStr) return;
+
+    let config;
+    try {
+        config = JSON.parse(cachedConfigStr);
+    } catch {
         return;
     }
 
-    // Abort any ongoing background syncs when user saves manually
-    if (currentSyncController) {
-        currentSyncController.abort();
+    isSyncing = true;
+    lastVersionCheckTimestamp = now;
+
+    try {
+        const res = await fetch(`/data/version.json?t=${now}`, { cache: 'no-cache' });
+        if (!res.ok) return;
+        const versionData = await res.json();
+        const serverVersion = versionData?.version;
+        if (!serverVersion) return;
+
+        const localVersion = localStorage.getItem('cachedTimetableVersion');
+        if (localVersion && String(localVersion) === String(serverVersion)) {
+            return; // No updates needed
+        }
+
+        const updatedTimetable = await buildTimetableFromConfig(config, serverVersion);
+        if (!updatedTimetable) return;
+
+        const oldTimetableStr = localStorage.getItem('cachedTimetable');
+        const newTimetableStr = JSON.stringify(updatedTimetable);
+
+        localStorage.setItem('cachedTimetable', newTimetableStr);
+        localStorage.setItem('cachedTimetableVersion', String(serverVersion));
+
+        if (oldTimetableStr !== newTimetableStr) {
+            renderTimetable(updatedTimetable);
+            renderMobileView(updatedTimetable);
+            buildMobileWeekStrip();
+            updateMobileDateText();
+        }
+    } catch (err) {
+        console.warn('Background timetable sync check skipped:', err);
+    } finally {
+        isSyncing = false;
     }
-    
+}
+
     const btn = document.getElementById('generate-btn');
     btn.innerHTML = 'Generating...';
     btn.disabled = true;
@@ -886,7 +651,7 @@ form.addEventListener('submit', async (e) => {
             localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
 
             // Fetch and record latest version in background
-            fetchWithTimeout(`/data/version.json?_t=${Date.now()}`, { cache: 'no-store' }, 5000)
+            fetch(`/data/version.json?t=${Date.now()}`, { cache: 'no-cache' })
                 .then(r => r.ok ? r.json() : null)
                 .then(v => {
                     if (v?.version) {
@@ -930,14 +695,15 @@ form.addEventListener('submit', async (e) => {
         }
     } catch (error) {
         // Offline fallback
-        const cachedTimetable = safeJsonParse(localStorage.getItem('cachedTimetable'));
-        const cachedConfig = safeJsonParse(localStorage.getItem('cachedConfig'));
+        const cachedTimetable = localStorage.getItem('cachedTimetable');
+        const cachedConfig = localStorage.getItem('cachedConfig');
 
         if (cachedTimetable && cachedConfig) {
-            lastConfig = cachedConfig;
+            const timetable = JSON.parse(cachedTimetable);
+            lastConfig = JSON.parse(cachedConfig);
 
-            renderTimetable(cachedTimetable);
-            renderMobileView(cachedTimetable);
+            renderTimetable(timetable);
+            renderMobileView(timetable);
             updateStatusBar(lastConfig.batch, lastConfig.course, lastConfig.section, lastConfig.subjects, lastConfig.names);
             if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
 
@@ -962,21 +728,24 @@ form.addEventListener('submit', async (e) => {
 
 // Load preferences on startup
 window.addEventListener('DOMContentLoaded', () => {
-    // 0 network requests on boot
+    initBatches(); // Ensure batches are populated
 
-
-    // 1. Run safe self-healing migration
-    const { savedBatch, savedCourse, savedSection, cachedTimetable, cachedConfig } = healAndMigrateUserData();
-
+    const savedBatch = localStorage.getItem('batch');
+    const savedCourse = localStorage.getItem('course');
+    const savedSection = localStorage.getItem('section');
     if (savedBatch) document.getElementById('batch-input').value = savedBatch;
     if (savedCourse) document.getElementById('course-input').value = savedCourse;
     if (savedSection) document.getElementById('section-input').value = savedSection;
     
+    const cachedTimetable = localStorage.getItem('cachedTimetable');
+    const cachedConfig = localStorage.getItem('cachedConfig');
+    
     if (cachedTimetable && cachedConfig) {
-        lastConfig = cachedConfig;
+        const timetable = JSON.parse(cachedTimetable);
+        lastConfig = JSON.parse(cachedConfig);
         
-        renderTimetable(cachedTimetable);
-        renderMobileView(cachedTimetable);
+        renderTimetable(timetable);
+        renderMobileView(timetable);
         
         // Use allNames / allSubs to handle repeat courses if they exist
         const allNames = lastConfig.repeat_courses ? [...lastConfig.names, ...lastConfig.repeat_courses.map(rc => rc.name)] : lastConfig.names;
@@ -991,46 +760,22 @@ window.addEventListener('DOMContentLoaded', () => {
         document.getElementById('week-grid').style.display = 'grid';
         closeModal();
 
-        // Check for updates in background (0ms delay to user, force if version missing)
-        const hasVersion = !!localStorage.getItem('cachedTimetableVersion');
-        checkForTimetableUpdates(!hasVersion);
+        // Check for updates in background (0ms delay to user)
+        checkForTimetableUpdates();
     } else {
         // Automatically open configure modal on first load
         openModal();
     }
 });
 
-// BFCache Tab Restore (iOS Safari & Android Chrome)
-window.addEventListener('pageshow', (event) => {
-    updateClock();
-    if (lastTimetableData) {
-        renderMobileView(lastTimetableData);
-        updateDesktopTimetableCurrentState();
-    }
-    checkForTimetableUpdates();
-});
-
 // Re-check on tab focus / visibility change
 document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
-        updateClock();
         checkForTimetableUpdates();
     }
 });
 window.addEventListener('focus', () => {
     checkForTimetableUpdates();
-});
-
-// Online / Offline listeners
-window.addEventListener('online', () => {
-    const banner = document.getElementById('offline-banner');
-    if (banner) banner.style.display = 'none';
-    checkForTimetableUpdates(true); // Force sync on reconnect
-});
-
-window.addEventListener('offline', () => {
-    const banner = document.getElementById('offline-banner');
-    if (banner) banner.style.display = 'flex';
 });
 
 function getSubjectColor(subject) {
@@ -1543,7 +1288,7 @@ function renderMobileView(timetableData) {
             </div>
             <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
         `;
-        frag.appendChild(el);
+        timeline.appendChild(el);
     });
 
     // Issue #8: Always render NOW divider when viewing today
@@ -1555,7 +1300,7 @@ function renderMobileView(timetableData) {
         const ampm = h >= 12 ? 'PM' : 'AM';
         const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
         nowDiv.innerHTML = `<span class="m-now-label"><span class="m-now-pulse"></span>Now · ${h12}:${m} ${ampm}</span>`;
-        frag.appendChild(nowDiv);
+        timeline.appendChild(nowDiv);
     }
 
     // Render CURRENT (Hero Card) — Issue #2: 12h times
@@ -1585,7 +1330,7 @@ function renderMobileView(timetableData) {
                 <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
             </div>
         `;
-        frag.appendChild(el);
+        timeline.appendChild(el);
     }
 
     // Render UPCOMING (Clean Card) — Issue #2: 12h, Issue #6: countdown
@@ -1611,7 +1356,7 @@ function renderMobileView(timetableData) {
                 <div class="m-up-detail">${upcoming.location}</div>
             </div>
         `;
-        frag.appendChild(el);
+        timeline.appendChild(el);
     }
 
     // Render LATER (Text only) — Issue #2: 12h
@@ -1626,31 +1371,22 @@ function renderMobileView(timetableData) {
             ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
             <div class="m-later-loc">${cls.location}</div>
         `;
-        frag.appendChild(el);
+        timeline.appendChild(el);
     });
-    timeline.appendChild(frag);
 }
 
 // Init mobile UI
 buildMobileWeekStrip();
 updateMobileDateText();
 
-// Refresh view classes every minute to keep current/upcoming accurate without destroying DOM
+// Refresh mobile view every minute to keep current/upcoming accurate & sync if sheet changed
 setInterval(() => {
     if (lastTimetableData) {
-        // Just re-render mobile if actually needed (full render is still destructive, but much better than before)
-        // Wait, for full optimization, we should just update the progress bar and current class marker.
-        // For now, at least we run it via frag so less thrashing, but ideally we don't rebuild.
-        // I will keep renderMobileView but it runs from frag.
         renderMobileView(lastTimetableData);
         updateDesktopTimetableCurrentState();
     }
     updateMobileDateText();
-    // Do NOT call checkForTimetableUpdates every 60s, that's what visibilitychange is for, or we do it if cache expires.
-    // Actually, background sync every 1 min is aggressive. Let's do it every 15 min.
-    if (Date.now() - (window.lastVersionCheckTimestamp || 0) > 15 * 60 * 1000) {
-        checkForTimetableUpdates();
-    }
+    checkForTimetableUpdates();
 }, 60000);
 
 
