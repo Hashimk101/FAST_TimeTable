@@ -80,6 +80,7 @@ function openModal() {
         // Prevent scroll avoids breaking the slide-up animation
         firstInput.focus({ preventScroll: true });
     }
+    initBatches(); // Lazy load the batch options here
 }
 
 function closeModal() {
@@ -229,16 +230,28 @@ function decodeData(encodedStr) {
     }
 }
 
+window.sessionCache = {};
 async function fetchDecoded(url, versionId = '') {
+    const cacheKey = versionId ? `${url}?v=${encodeURIComponent(versionId)}` : url;
+    
+    if (window.sessionCache[cacheKey]) {
+        return window.sessionCache[cacheKey];
+    }
+
     try {
-        const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
-        const res = await fetchWithTimeout(url + queryParam, { cache: 'default' }, 8000);
-        if (!res.ok) return null;
+        const res = await fetchWithTimeout(cacheKey, { cache: 'default' }, 8000);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
-        return decodeData(text);
+        const data = decodeData(text);
+        
+        if (url.includes('batches.bin') || url.includes('subjects.bin') || url.includes('electives.bin') || url.includes('repeats.bin')) {
+            window.sessionCache[cacheKey] = data;
+        }
+        
+        return data;
     } catch (e) {
         console.warn(`Could not load ${url}`, e);
-        return null;
+        throw e; // Throw so that buildTimetableFromConfig catches it instead of silently returning null!
     }
 }
 
