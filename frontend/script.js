@@ -210,11 +210,25 @@ function decodeData(encodedStr) {
 async function fetchDecoded(url, versionId = '') {
     try {
         const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
-        const res = await fetch(url + queryParam);
+        let res = await fetch(url + queryParam);
+        // Fallback: if absolute path fails, try relative path (for local dev servers)
+        if (!res.ok && url.startsWith('/')) {
+            res = await fetch(url.slice(1) + queryParam);
+        }
         if (!res.ok) return null;
         const text = await res.text();
         return decodeData(text);
     } catch (e) {
+        // If absolute path threw, try relative
+        if (url.startsWith('/')) {
+            try {
+                const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
+                const res = await fetch(url.slice(1) + queryParam);
+                if (!res.ok) return null;
+                const text = await res.text();
+                return decodeData(text);
+            } catch (_) {}
+        }
         console.warn(`Could not load ${url}`, e);
         return null;
     }
@@ -553,7 +567,13 @@ async function checkForTimetableUpdates(force = false) {
     lastVersionCheckTimestamp = now;
 
     try {
-        const res = await fetch(`/data/version.json?t=${now}`, { cache: 'no-cache' });
+        let res;
+        try {
+            res = await fetch(`/data/version.json?t=${now}`, { cache: 'no-cache' });
+            if (!res.ok) res = await fetch(`data/version.json?t=${now}`, { cache: 'no-cache' });
+        } catch(e) {
+            res = await fetch(`data/version.json?t=${now}`, { cache: 'no-cache' });
+        }
         if (!res.ok) return;
         const versionData = await res.json();
         const serverVersion = versionData?.version;
@@ -655,8 +675,11 @@ form.addEventListener('submit', async (e) => {
             localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
 
             // Fetch and record latest version in background
-            fetch(`/data/version.json?t=${Date.now()}`, { cache: 'no-cache' })
+            const vNow = Date.now();
+            fetch(`/data/version.json?t=${vNow}`, { cache: 'no-cache' })
+                .then(r => r.ok ? r : fetch(`data/version.json?t=${vNow}`, { cache: 'no-cache' }))
                 .then(r => r.ok ? r.json() : null)
+                .catch(() => fetch(`data/version.json?t=${vNow}`, { cache: 'no-cache' }).then(r => r.ok ? r.json() : null))
                 .then(v => {
                     if (v?.version) {
                         localStorage.setItem('cachedTimetableVersion', String(v.version));
@@ -1569,6 +1592,9 @@ function generateTimetablePNG() {
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d', { alpha: false });
 
+    // Reset baseline just in case
+    ctx.textBaseline = 'alphabetic';
+
     const bg = '#ffffff', textDark = '#1a1a1a', textLight = '#555555', border = '#e2e8f0';
     const headerBg = '#0f172a', headerText = '#ffffff';
     ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
@@ -1576,11 +1602,12 @@ function generateTimetablePNG() {
     const headerH = 120 * scale;
     ctx.fillStyle = headerBg; ctx.fillRect(0, 0, w, headerH);
     ctx.fillStyle = headerText;
-    ctx.font = 'bold ' + (42*scale) + 'px system-ui, sans-serif';
+    ctx.font = 'bold ' + (42*scale) + 'px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText('FAST NUCES ISLAMABAD', 40*scale, headerH/2);
     ctx.textAlign = 'right';
-    ctx.fillText(lastConfig.batch + ' ' + lastConfig.course + ' - ' + lastConfig.section, w - 40*scale, headerH/2);
+    const nameStr = (lastConfig.batch||'') + ' ' + (lastConfig.course||'') + ' - ' + (lastConfig.section||'');
+    ctx.fillText(nameStr.trim(), w - 40*scale, headerH/2);
 
     const padX = 40*scale, padY = 40*scale;
     const topOff = headerH + padY;
@@ -1590,7 +1617,8 @@ function generateTimetablePNG() {
 
     let minT = 8.5, maxT = 17.25;
     timetable.forEach(d => d.forEach(c => {
-        const s = parseTime(c.start_time)/60, e = parseTime(c.end_time)/60;
+        // parseTime already returns decimal hours (e.g., 8.5)
+        const s = parseTime(c.start_time), e = parseTime(c.end_time);
         if (s > 0 && s < minT) minT = Math.floor(s);
         if (e > 0 && e > maxT) maxT = Math.ceil(e);
     }));
@@ -1598,11 +1626,12 @@ function generateTimetablePNG() {
     const dayHdrH = 50*scale, bodyH = gridH - dayHdrH;
 
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     for (let i = 0; i < 6; i++) {
         const cx = padX + i*colW;
         if (i%2 !== 0) { ctx.fillStyle = '#f8fafc'; ctx.fillRect(cx, topOff+dayHdrH, colW, bodyH); }
         if (i > 0) { ctx.strokeStyle = border; ctx.lineWidth = 2*scale; ctx.beginPath(); ctx.moveTo(cx, topOff); ctx.lineTo(cx, topOff+gridH); ctx.stroke(); }
-        ctx.fillStyle = textDark; ctx.font = 'bold ' + (22*scale) + 'px system-ui, sans-serif';
+        ctx.fillStyle = textDark; ctx.font = 'bold ' + (22*scale) + 'px system-ui, -apple-system, sans-serif';
         ctx.fillText(days[i], cx+colW/2, topOff+dayHdrH/2);
     }
     ctx.strokeStyle = border; ctx.lineWidth = 2*scale;
@@ -1615,26 +1644,68 @@ function generateTimetablePNG() {
         {bg:'#fce7f3',bd:'#f9a8d4',tx:'#be185d'}
     ];
 
+    function format12(timeStr) {
+        if (!timeStr) return '';
+        const [h,m] = timeStr.split(':');
+        const H = parseInt(h,10);
+        const ampm = H >= 12 ? 'PM' : 'AM';
+        const H12 = H % 12 || 12;
+        return `${H12}:${m} ${ampm}`;
+    }
+
+    // Wrap text helper
+    function wrapText(context, text, maxWidth) {
+        const words = text.split(' ');
+        const lines = [];
+        let currentLine = words[0];
+        for (let i = 1; i < words.length; i++) {
+            const word = words[i];
+            const width = context.measureText(currentLine + ' ' + word).width;
+            if (width < maxWidth) { currentLine += ' ' + word; }
+            else { lines.push(currentLine); currentLine = word; }
+        }
+        lines.push(currentLine);
+        return lines;
+    }
+
     timetable.forEach((daySch, di) => {
         const cx = padX + di*colW;
         daySch.forEach(cls => {
-            const sH = parseTime(cls.start_time)/60, eH = parseTime(cls.end_time)/60;
+            const sH = parseTime(cls.start_time), eH = parseTime(cls.end_time);
             if (sH === 0 || eH === 0) return;
             const sy = topOff+dayHdrH+((sH-minT)/span)*bodyH;
             const ch = ((eH-sH)/span)*bodyH;
+            
             let hash = 0;
             for (let i=0;i<cls.subject.length;i++) hash = cls.subject.charCodeAt(i)+((hash<<5)-hash);
             const col = cardColors[Math.abs(hash)%cardColors.length];
             const rx = cx+cardM, ry = sy, rw = colW-cardM*2;
+            
             ctx.fillStyle = col.bg; ctx.beginPath(); ctx.roundRect(rx,ry,rw,ch,8*scale); ctx.fill();
             ctx.strokeStyle = col.bd; ctx.lineWidth = 2*scale; ctx.stroke();
+            
             ctx.fillStyle = col.tx;
-            ctx.font = (14*scale)+'px system-ui,sans-serif';
-            ctx.fillText(formatTime12h(cls.start_time)+' - '+formatTime12h(cls.end_time), rx+rw/2, ry+24*scale);
-            ctx.font = 'bold '+(20*scale)+'px system-ui,sans-serif';
-            ctx.fillText(cls.subject, rx+rw/2, ry+ch/2);
-            ctx.font = (16*scale)+'px system-ui,sans-serif';
-            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-16*scale);
+            ctx.textBaseline = 'top';
+            
+            // Draw Time (top)
+            ctx.font = (14*scale)+'px system-ui, -apple-system, sans-serif';
+            ctx.fillText(format12(cls.start_time)+' - '+format12(cls.end_time), rx+rw/2, ry+12*scale);
+            
+            // Draw Subject (center wrapped)
+            ctx.font = 'bold '+(20*scale)+'px system-ui, -apple-system, sans-serif';
+            const lines = wrapText(ctx, cls.subject, rw - 24*scale);
+            const lh = 24*scale;
+            const textBlockH = lines.length * lh;
+            let startY = ry + ch/2 - textBlockH/2;
+            lines.forEach(line => {
+                ctx.fillText(line, rx+rw/2, startY);
+                startY += lh;
+            });
+            
+            // Draw Room (bottom)
+            ctx.font = (16*scale)+'px system-ui, -apple-system, sans-serif';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-12*scale);
         });
     });
 
@@ -1642,7 +1713,7 @@ function generateTimetablePNG() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const name = (lastConfig.batch+'_'+lastConfig.course+'_'+lastConfig.section).replace(/[^a-zA-Z0-9]/g,'_');
+        const name = nameStr.replace(/[^a-zA-Z0-9]/g,'_');
         a.download = 'FAST_Timetable_'+name+'.png';
         a.click();
         URL.revokeObjectURL(url);
