@@ -271,6 +271,34 @@ def generate_static_data():
 
     print(f"Successfully generated {count} schedule binary files in {schedules_dir}!")
 
+    
+    # NEW: Generate Free Rooms Occupancy Map
+    print("Generating rooms.bin for Find Free Rooms...")
+    rooms_data = {
+        "rooms": [],
+        "occupied": { d: {} for d in DAYS_OF_WEEK }
+    }
+    
+    with sqlite3.connect(COURSE_DB) as conn:
+        cur = conn.cursor()
+        # Only fetch Block C and Block D classrooms
+        cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%' ORDER BY CLASSROOM")
+        valid_rooms = [r[0] for r in cur.fetchall()]
+        rooms_data["rooms"] = valid_rooms
+        
+        for r in valid_rooms:
+            for d in DAYS_OF_WEEK:
+                rooms_data["occupied"][d][r] = []
+                
+        cur.execute("SELECT DAY, CLASSROOM, START_TIME, END_TIME FROM timetable WHERE CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%'")
+        for day, room, start, end in cur.fetchall():
+            if day in rooms_data["occupied"] and room in rooms_data["occupied"][day]:
+                rooms_data["occupied"][day][room].append({"s": start, "e": end})
+                
+    with open(os.path.join(OUTPUT_DIR, 'rooms.bin'), 'w') as f:
+        f.write(encode_data(rooms_data))
+    print(f"Generated rooms.bin ({len(valid_rooms)} rooms tracked)")
+
     # 6. Generate Version Manifest
     version_info = {
         "version": int(time.time()),
