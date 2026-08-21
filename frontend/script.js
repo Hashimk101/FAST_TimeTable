@@ -1610,8 +1610,11 @@ function generateTimetablePNG() {
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText('FAST NUCES ISLAMABAD', 40*scale, headerH/2);
     ctx.textAlign = 'right';
-    const nameStr = (lastConfig.batch||'') + ' ' + (lastConfig.course||'') + ' - ' + (lastConfig.section||'');
-    ctx.fillText(nameStr.trim(), w - 40*scale, headerH/2);
+    const nameParts = [lastConfig.batch, lastConfig.course, lastConfig.section].filter(p => p && p.trim() !== '');
+    const nameStr = nameParts.length > 2 
+        ? `${nameParts[0]} ${nameParts[1]} - ${nameParts[2]}`
+        : nameParts.join(' ');
+    ctx.fillText(nameStr, w - 40*scale, headerH/2);
 
     const padX = 40*scale, padY = 40*scale;
     const topOff = headerH + padY;
