@@ -1938,323 +1938,38 @@ kbd {
   }
 }
 
-/* === Side Drawer Menu (HCI Minimalist Bars) === */
-.drawer-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  z-index: 900;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.25s ease, visibility 0.25s ease;
-}
 
-.drawer-overlay.active {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-}
-
-.side-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 320px;
-  max-width: 85vw;
-  height: 100dvh;
-  background: var(--surface-color);
-  border-left: 1px solid var(--border-color);
-  box-shadow: -16px 0 36px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-  will-change: transform;
-  z-index: 910;
-}
-
-.drawer-overlay.active .side-drawer {
-  transform: translateX(0);
-}
-
-/* Drawer Header */
-.drawer-header {
-  padding: 22px 20px 16px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.drawer-title {
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
-}
-
-/* Drawer Body & Linear List Rows (Fitts's Law Target Size) */
-.drawer-body {
-  flex: 1;
-  padding: 16px;
-  overflow-y: auto;
-}
-
-.drawer-nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.drawer-nav-item {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 13px 14px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: var(--r-md);
-  color: var(--text-primary);
-  font-family: inherit;
-  font-size: 0.88rem;
-  font-weight: 500;
-  cursor: pointer;
-  min-height: 48px;
-  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
-}
-
-.drawer-nav-item:hover {
-  background: var(--surface-hover);
-  border-color: var(--text-tertiary);
-}
-
-.drawer-nav-item:active {
-  transform: scale(0.985);
-}
-
-.drawer-nav-item-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.drawer-nav-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
-.drawer-nav-label {
-  font-size: 0.88rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-}
-
-.drawer-nav-chevron {
-  color: var(--text-tertiary);
-  transition: transform 0.15s ease, color 0.15s ease;
-}
-
-.drawer-nav-item:hover .drawer-nav-chevron {
-  color: var(--text-primary);
-  transform: translateX(2px);
-}
-
-.drawer-nav-badge {
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 3px 8px;
-  border-radius: var(--r-sm);
-  background: var(--surface-hover);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-}
-
-.drawer-footer {
-  padding: 14px 20px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-}
-
-/* ==========================================================================
-   Dedicated Free Rooms Modal & Segmented Controls
-   ========================================================================== */
-
-.rooms-modal-content {
-  max-width: 480px;
-}
-
-.segmented-grid {
-  display: grid;
-  gap: 6px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  padding: 4px;
-  border-radius: var(--r-md);
-}
-
-.segmented-grid-2 { grid-template-columns: repeat(2, 1fr); }
-.segmented-grid-4 {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.segmented-grid-5 {
-  grid-template-columns: repeat(5, 1fr);
-}
-
-.segment-btn {
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 0.78rem;
-  font-weight: 500;
-  padding: 8px 4px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  text-align: center;
-  transition: all 0.15s ease;
-  user-select: none;
-  min-height: 36px;
-}
-
-.segment-btn:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
-}
-
-.segment-btn.active {
-  background: var(--surface-color);
-  border-color: var(--border-color);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-}
-
-.custom-select-wrap {
-  position: relative;
-}
-
-.form-select {
-  width: 100%;
-  appearance: none;
-  -webkit-appearance: none;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  padding: 11px 14px;
-  border-radius: var(--r-sm);
-  font-family: inherit;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.form-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-  outline: none;
-}
-
-.custom-select-wrap::after {
-  content: "";
-  position: absolute;
-  right: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 8px;
-  height: 5px;
-  background-color: var(--text-tertiary);
-  clip-path: polygon(100% 0%, 0 0%, 50% 100%);
-  pointer-events: none;
-}
-
-/* Free Rooms Results Grid */
-.rooms-results-container {
-  margin-top: 24px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-color);
-  animation: fadeInStep 0.25s ease-out;
-}
-
-.results-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.results-badge {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 3px 8px;
-  border-radius: var(--r-sm);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border: 1px solid var(--accent);
-}
-
-.results-subtext {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-}
-
-.rooms-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-  gap: 8px;
-  max-height: 200px;
-  overflow-y: auto;
-  padding: 2px;
-}
-
-.room-chip {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px 6px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  border-radius: var(--r-sm);
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  transition: transform 0.12s ease, border-color 0.12s ease;
-}
-
-.room-chip:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.rooms-empty {
-  grid-column: 1 / -1;
-  text-align: center;
-  padding: 24px 12px;
-  color: var(--text-tertiary);
-  font-size: 0.82rem;
-}
-
-@media (max-width: 640px) {
-  .side-drawer {
-    width: 85vw;
-    padding-top: env(safe-area-inset-top, 0);
-    padding-bottom: env(safe-area-inset-bottom, 0);
-  }
-}
+/* === Side Drawer === */
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:900;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 0.25s ease,visibility 0.25s ease}
+.drawer-overlay.active{opacity:1;visibility:visible;pointer-events:auto}
+.side-drawer{position:fixed;top:0;right:0;bottom:0;width:320px;max-width:85vw;height:100dvh;background:var(--surface-color);border-left:1px solid var(--border-color);box-shadow:-16px 0 36px rgba(0,0,0,0.3);display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.3s cubic-bezier(0.16,1,0.3,1);will-change:transform;z-index:910}
+.drawer-overlay.active .side-drawer{transform:translateX(0)}
+.drawer-header{padding:22px 20px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border-color)}
+.drawer-title{font-size:1.05rem;font-weight:600;letter-spacing:-0.02em;color:var(--text-primary)}
+.drawer-body{flex:1;padding:16px;overflow-y:auto}
+.drawer-nav-list{display:flex;flex-direction:column;gap:8px}
+.drawer-nav-item{width:100%;display:flex;align-items:center;justify-content:space-between;padding:13px 14px;background:var(--bg-color);border:1px solid var(--border-color);border-radius:var(--r-md);color:var(--text-primary);font-family:inherit;font-size:0.88rem;font-weight:500;cursor:pointer;min-height:48px;transition:background-color 0.15s ease,border-color 0.15s ease,transform 0.1s ease}
+.drawer-nav-item:hover{background:var(--surface-hover);border-color:var(--text-tertiary)}
+.drawer-nav-item:active{transform:scale(0.985)}
+.drawer-nav-label{font-size:0.88rem;font-weight:500;color:var(--text-primary);letter-spacing:-0.01em}
+.drawer-nav-chevron{color:var(--text-tertiary);transition:transform 0.15s ease,color 0.15s ease}
+.drawer-nav-item:hover .drawer-nav-chevron{color:var(--text-primary);transform:translateX(2px)}
+.drawer-nav-badge{font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;padding:3px 8px;border-radius:var(--r-sm);background:var(--surface-hover);color:var(--text-secondary);border:1px solid var(--border-color)}
+.drawer-footer{padding:14px 20px;border-top:1px solid var(--border-color);display:flex;justify-content:space-between;font-size:0.72rem;color:var(--text-tertiary)}
+@media(max-width:640px){.side-drawer{width:85vw}}
+/* === Free Rooms Modal Extras === */
+.rooms-modal-content{max-width:480px}
+.segmented-grid{display:grid;gap:6px;background:var(--bg-color);border:1px solid var(--border-color);padding:4px;border-radius:var(--r-md)}
+.segmented-grid-2{grid-template-columns:repeat(2,1fr)}
+.segmented-grid-5{grid-template-columns:repeat(5,1fr)}
+.segment-btn{background:transparent;border:1px solid transparent;color:var(--text-secondary);font-family:inherit;font-size:0.78rem;font-weight:500;padding:8px 4px;border-radius:var(--r-sm);cursor:pointer;text-align:center;transition:all 0.15s ease;min-height:36px}
+.segment-btn:hover{color:var(--text-primary);background:var(--surface-hover)}
+.segment-btn.active{background:var(--surface-color);border-color:var(--border-color);color:var(--accent);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,0.18)}
+.custom-select-wrap{position:relative}
+.form-select{width:100%;appearance:none;-webkit-appearance:none;background:var(--bg-color);border:1px solid var(--border-color);color:var(--text-primary);padding:11px 14px;border-radius:var(--r-sm);font-family:inherit;font-size:0.85rem;font-weight:500;cursor:pointer;transition:border-color 0.2s ease}
+.form-select:focus{border-color:var(--accent);outline:none}
+.custom-select-wrap::after{content:"";position:absolute;right:14px;top:50%;transform:translateY(-50%);width:8px;height:5px;background-color:var(--text-tertiary);clip-path:polygon(100% 0%,0 0%,50% 100%);pointer-events:none}
+.results-badge{font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding:3px 8px;border-radius:var(--r-sm);background:var(--accent-subtle);color:var(--accent);border:1px solid var(--accent)}
+.rooms-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;max-height:200px;overflow-y:auto;padding:2px}
+.room-chip{display:flex;align-items:center;justify-content:center;padding:8px 6px;background:var(--bg-color);border:1px solid var(--border-color);border-radius:var(--r-sm);font-size:0.8rem;font-weight:600;color:var(--text-primary);transition:transform 0.12s ease,border-color 0.12s ease}
+.room-chip:hover{border-color:var(--accent);transform:translateY(-1px)}
