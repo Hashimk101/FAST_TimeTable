@@ -975,7 +975,6 @@ let lastTimetableData = null; // Store for mobile re-renders
 let mobileSelectedDay = null; // null = today. 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 
 // Wire mobile buttons to existing desktop functionality
-document.getElementById('mobile-config-btn')?.addEventListener('click', () => openModal());
 document.getElementById('mobile-settings-btn')?.addEventListener('click', () => openModal());
 
 // Mobile theme toggle syncs with desktop toggle
