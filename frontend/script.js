@@ -122,267 +122,15 @@ modal.addEventListener('keydown', (e) => {
     }
 });
 
-// === Side Drawer Menu & Free Rooms Controller ===
-const drawerOverlay = document.getElementById('drawer-overlay');
-const sideDrawer = document.getElementById('side-drawer');
-const openDrawerDesktopBtn = document.getElementById('menu-toggle-btn');
-const openDrawerMobileBtn = document.getElementById('mobile-menu-btn');
-const closeDrawerBtn = document.getElementById('close-drawer-btn');
-
-const navItemExport = document.getElementById('nav-item-export');
-const navItemRooms = document.getElementById('nav-item-rooms');
-const navItemConfig = document.getElementById('nav-item-config');
-const navItemTheme = document.getElementById('nav-item-theme');
-const navThemeStatus = document.getElementById('nav-theme-status');
-
-const roomsModal = document.getElementById('rooms-modal');
-const closeRoomsModalBtn = document.getElementById('close-rooms-modal-btn');
-const findRoomsBtn = document.getElementById('find-rooms-btn');
-const timeSlotSelect = document.getElementById('time-slot-select');
-const blockSegmentBtns = document.querySelectorAll('#rooms-modal [data-block]');
-const daySegmentBtns = document.querySelectorAll('#rooms-modal [data-day]');
-const roomsResultsContainer = document.getElementById('rooms-results-container');
-const roomsGrid = document.getElementById('rooms-grid');
-const resultsCountBadge = document.getElementById('results-count-badge');
-const resultsContextLabel = document.getElementById('results-context-label');
-
-let drawerLastFocused = null;
-let selectedRoomBlock = 'C';
-let selectedRoomDay = 'Monday';
-
-function openDrawer() {
-    drawerLastFocused = document.activeElement;
-    drawerOverlay?.classList.add('active');
-    drawerOverlay?.setAttribute('aria-hidden', 'false');
-    const firstFocusable = sideDrawer?.querySelector('button, [tabindex]:not([tabindex="-1"])');
-    if (firstFocusable) firstFocusable.focus({ preventScroll: true });
-}
-
-function closeDrawer() {
-    drawerOverlay?.classList.remove('active');
-    drawerOverlay?.setAttribute('aria-hidden', 'true');
-    if (drawerLastFocused) drawerLastFocused.focus();
-}
-
-openDrawerDesktopBtn?.addEventListener('click', openDrawer);
-openDrawerMobileBtn?.addEventListener('click', openDrawer);
-closeDrawerBtn?.addEventListener('click', closeDrawer);
-
-// Close drawer on overlay click
-drawerOverlay?.addEventListener('click', (e) => {
-    if (e.target === drawerOverlay) closeDrawer();
-});
-
-// Mobile touch swipe to dismiss drawer
-let drawerTouchStartX = 0;
-sideDrawer?.addEventListener('touchstart', (e) => {
-    drawerTouchStartX = e.touches[0].clientX;
-}, { passive: true });
-
-sideDrawer?.addEventListener('touchend', (e) => {
-    const deltaX = e.changedTouches[0].clientX - drawerTouchStartX;
-    if (deltaX > 75) closeDrawer();
-});
-
-// Drawer focus trap
-drawerOverlay?.addEventListener('keydown', (e) => {
-    if (e.key !== 'Tab') return;
-    const focusables = sideDrawer?.querySelectorAll('button, input, select, [tabindex]:not([tabindex="-1"])') || [];
-    if (focusables.length === 0) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-    }
-});
-
-// --- Menu Navigation Actions ---
-navItemExport?.addEventListener('click', () => {
-    closeDrawer();
-    generateTimetablePNG();
-});
-
-navItemRooms?.addEventListener('click', () => {
-    openRoomsModal();
-});
-
-navItemConfig?.addEventListener('click', () => {
-    closeDrawer();
-    openModal();
-});
-
-function syncNavThemeStatus() {
-    const theme = html.getAttribute('data-theme') || 'dark';
-    if (navThemeStatus) navThemeStatus.textContent = theme === 'dark' ? 'Dark' : 'Light';
-}
-
-navItemTheme?.addEventListener('click', () => {
-    themeToggleBtn?.click();
-    syncNavThemeStatus();
-});
-
-// --- Free Rooms Modal Logic ---
-function openRoomsModal() {
-    closeDrawer();
-    initRoomDefaults();
-    roomsModal?.classList.add('active');
-    const firstFocusable = roomsModal?.querySelector('button, select, input');
-    if (firstFocusable) firstFocusable.focus({ preventScroll: true });
-}
-
-function closeRoomsModal() {
-    roomsModal?.classList.remove('active');
-}
-
-closeRoomsModalBtn?.addEventListener('click', closeRoomsModal);
-roomsModal?.addEventListener('click', (e) => {
-    if (e.target === roomsModal) closeRoomsModal();
-});
-
-function initRoomDefaults() {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const currentDay = days[new Date().getDay()];
-    selectedRoomDay = (currentDay === 'Sunday' || currentDay === 'Saturday') ? 'Monday' : currentDay;
-    
-    daySegmentBtns.forEach(btn => {
-        const isActive = btn.dataset.day === selectedRoomDay;
-        btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
-    });
-
-    const now = new Date();
-    const currentMins = now.getHours() * 60 + now.getMinutes();
-    const slots = [
-        { label: '08:30 - 09:50', end: 9 * 60 + 50 },
-        { label: '10:00 - 11:20', end: 11 * 60 + 20 },
-        { label: '11:30 - 12:50', end: 12 * 60 + 50 },
-        { label: '01:00 - 02:20', end: 14 * 60 + 20 },
-        { label: '02:30 - 03:50', end: 15 * 60 + 50 },
-        { label: '03:55 - 05:15', end: 17 * 60 + 15 },
-    ];
-    const matchedSlot = slots.find(s => currentMins <= s.end);
-    if (matchedSlot && timeSlotSelect) {
-        timeSlotSelect.value = matchedSlot.label;
-    }
-}
-
-blockSegmentBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        blockSegmentBtns.forEach(b => {
-            b.classList.remove('active');
-            b.setAttribute('aria-checked', 'false');
-        });
-        btn.classList.add('active');
-        btn.setAttribute('aria-checked', 'true');
-        selectedRoomBlock = btn.dataset.block || 'A';
-    });
-});
-
-daySegmentBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-        daySegmentBtns.forEach(b => {
-            b.classList.remove('active');
-            b.setAttribute('aria-checked', 'false');
-        });
-        btn.classList.add('active');
-        btn.setAttribute('aria-checked', 'true');
-        selectedRoomDay = btn.dataset.day || 'Monday';
-    });
-});
-
-let cachedRoomsData = null;
-
-findRoomsBtn?.addEventListener('click', async () => {
-    const timeSlot = timeSlotSelect?.value || '08:30 - 09:50';
-    const [startStr, endStr] = timeSlot.split(' - ');
-    const slotStart = parseTime(startStr);
-    const slotEnd = parseTime(endStr);
-    
-    // Fetch data if not cached
-    if (!cachedRoomsData) {
-        findRoomsBtn.innerHTML = 'Scanning...';
-        findRoomsBtn.disabled = true;
-        let data = await fetchDecoded('data/rooms.bin');
-        if (!data) data = await fetchDecoded('/data/rooms.bin');
-        cachedRoomsData = data;
-        findRoomsBtn.innerHTML = 'Find Rooms';
-        findRoomsBtn.disabled = false;
-    }
-    
-    if (!cachedRoomsData) {
-        showToast('Failed to load room data.', 'error');
-        return;
-    }
-    
-    const allRooms = cachedRoomsData.rooms;
-    const occupiedData = cachedRoomsData.occupied;
-    
-    // Filter rooms by selected block (C or D)
-    const blockRooms = allRooms.filter(r => r.startsWith(selectedRoomBlock + '-'));
-    const freeRooms = [];
-    
-    const dayOccupancy = occupiedData[selectedRoomDay] || {};
-    
-    for (const room of blockRooms) {
-        const classes = dayOccupancy[room] || [];
-        let isOccupied = false;
-        
-        for (const cls of classes) {
-            const clsStart = parseTime(cls.s);
-            const clsEnd = parseTime(cls.e);
-            
-            // Overlap condition: max(start1, start2) < min(end1, end2)
-            if (Math.max(slotStart, clsStart) < Math.min(slotEnd, clsEnd)) {
-                isOccupied = true;
-                break;
-            }
-        }
-        
-        if (!isOccupied) {
-            freeRooms.push(room);
-        }
-    }
-
-    renderFreeRoomResults(freeRooms, selectedRoomBlock, selectedRoomDay, timeSlot);
-});
-
-function renderFreeRoomResults(rooms, block, day, slot) {
-    if (!roomsResultsContainer || !roomsGrid) return;
-    roomsResultsContainer.style.display = 'block';
-    resultsCountBadge.textContent = `${rooms.length} Free Rooms`;
-    resultsContextLabel.textContent = `Block ${block} · ${day.slice(0, 3)} · ${slot}`;
-
-    if (rooms.length === 0) {
-        roomsGrid.innerHTML = `<div class="rooms-empty">No free rooms found for this slot.</div>`;
-        return;
-    }
-
-    roomsGrid.innerHTML = rooms
-        .map(room => `<div class="room-chip">${room}</div>`)
-        .join('');
-}
-
-// === Global Keyboard Shortcuts ===
+// Close on Escape
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-        if (drawerOverlay?.classList.contains('active')) {
-            closeDrawer();
-            return;
-        }
-        if (roomsModal?.classList.contains('active')) {
-            closeRoomsModal();
-            return;
-        }
-        if (modal?.classList.contains('active')) {
-            closeModal();
-            return;
-        }
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+        closeModal();
     }
+});
 
+// === Keyboard Shortcuts ===
+document.addEventListener('keydown', (e) => {
     // Don't fire shortcuts when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
     // Don't hijack Ctrl/Cmd shortcuts (Ctrl+C = copy, etc.)
@@ -390,13 +138,6 @@ document.addEventListener('keydown', (e) => {
     
     if (e.key === 'c' || e.key === 'C') {
         openModal();
-    }
-    if (e.key === 'm' || e.key === 'M') {
-        if (drawerOverlay?.classList.contains('active')) {
-            closeDrawer();
-        } else {
-            openDrawer();
-        }
     }
     if (e.key === 't' || e.key === 'T') {
         themeToggleBtn.click();
@@ -723,11 +464,6 @@ window.removeRepeatCourse = function(index) {
 };
 
 
-// === Generate Timetable ===
-const form = document.getElementById('config-form');
-const gearSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`;
-
-let lastConfig = null;
 
 // === Timetable Builder & Sync System ===
 
@@ -848,6 +584,14 @@ async function checkForTimetableUpdates(force = false) {
     } finally {
         isSyncing = false;
     }
+}
+
+
+// === Generate Timetable ===
+const form = document.getElementById('config-form');
+const gearSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`;
+
+let lastConfig = null;
 
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -873,8 +617,6 @@ form.addEventListener('submit', async (e) => {
             return;
         }
     }
-
-}
 
     const btn = document.getElementById('generate-btn');
     btn.innerHTML = 'Generating...';
@@ -1655,218 +1397,255 @@ setInterval(() => {
 
 
 
-// ===================================================================
-// HIGH-RES PNG EXPORTER (Clarity Focused)
-// ===================================================================
-async function generateTimetablePNG() {
-    if (!lastConfig) {
-        showToast('Please configure a schedule first.');
-        return;
+// === Side Drawer Menu & Free Rooms ===
+(function() {
+    const drawerOverlay = document.getElementById('drawer-overlay');
+    const sideDrawer = document.getElementById('side-drawer');
+    const openDrawerDesktopBtn = document.getElementById('menu-toggle-btn');
+    const openDrawerMobileBtn = document.getElementById('mobile-menu-btn');
+    const closeDrawerBtn = document.getElementById('close-drawer-btn');
+    const roomsModal = document.getElementById('rooms-modal');
+    const closeRoomsModalBtn = document.getElementById('close-rooms-modal-btn');
+    const findRoomsBtn = document.getElementById('find-rooms-btn');
+    const timeSlotSelect = document.getElementById('time-slot-select');
+    const blockBtns = document.querySelectorAll('#rooms-modal [data-block]');
+    const dayBtns = document.querySelectorAll('#rooms-modal [data-day]');
+    const roomsResultsContainer = document.getElementById('rooms-results-container');
+    const roomsGrid = document.getElementById('rooms-grid');
+    const resultsCountBadge = document.getElementById('results-count-badge');
+    const resultsContextLabel = document.getElementById('results-context-label');
+
+    let selectedBlock = 'C';
+    let selectedDay = 'Monday';
+    let cachedRoomsData = null;
+
+    function openDrawer() {
+        drawerOverlay?.classList.add('active');
+        drawerOverlay?.setAttribute('aria-hidden', 'false');
     }
+    function closeDrawer() {
+        drawerOverlay?.classList.remove('active');
+        drawerOverlay?.setAttribute('aria-hidden', 'true');
+    }
+
+    openDrawerDesktopBtn?.addEventListener('click', openDrawer);
+    openDrawerMobileBtn?.addEventListener('click', openDrawer);
+    closeDrawerBtn?.addEventListener('click', closeDrawer);
+    drawerOverlay?.addEventListener('click', (e) => { if (e.target === drawerOverlay) closeDrawer(); });
+
+    // Swipe right to dismiss
+    let touchStartX = 0;
+    sideDrawer?.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+    sideDrawer?.addEventListener('touchend', (e) => { if (e.changedTouches[0].clientX - touchStartX > 75) closeDrawer(); });
+
+    // Nav item: Export PNG
+    document.getElementById('nav-item-export')?.addEventListener('click', () => {
+        closeDrawer();
+        if (typeof generateTimetablePNG === 'function') {
+            generateTimetablePNG();
+        } else {
+            showToast('Please configure a schedule first.', 'error');
+        }
+    });
+
+    // Nav item: Find Free Rooms
+    document.getElementById('nav-item-rooms')?.addEventListener('click', () => {
+        closeDrawer();
+        openRoomsModal();
+    });
+
+    // Nav item: Configure
+    document.getElementById('nav-item-config')?.addEventListener('click', () => {
+        closeDrawer();
+        openModal();
+    });
+
+    // Nav item: Theme
+    const navThemeStatus = document.getElementById('nav-theme-status');
+    function syncThemeLabel() {
+        const t = document.documentElement.getAttribute('data-theme') || 'dark';
+        if (navThemeStatus) navThemeStatus.textContent = t === 'dark' ? 'Dark' : 'Light';
+    }
+    syncThemeLabel();
+    document.getElementById('nav-item-theme')?.addEventListener('click', () => {
+        document.getElementById('theme-toggle')?.click();
+        syncThemeLabel();
+    });
+
+    // --- Free Rooms Modal ---
+    function openRoomsModal() {
+        initRoomDefaults();
+        roomsModal?.classList.add('active');
+    }
+    function closeRoomsModal() {
+        roomsModal?.classList.remove('active');
+    }
+    closeRoomsModalBtn?.addEventListener('click', closeRoomsModal);
+    roomsModal?.addEventListener('click', (e) => { if (e.target === roomsModal) closeRoomsModal(); });
+
+    function initRoomDefaults() {
+        const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const today = dayNames[new Date().getDay()];
+        selectedDay = (today === 'Sunday' || today === 'Saturday') ? 'Monday' : today;
+        dayBtns.forEach(b => {
+            const active = b.dataset.day === selectedDay;
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+        const now = new Date();
+        const mins = now.getHours() * 60 + now.getMinutes();
+        const slots = [
+            {v:'08:30 - 09:50',e:590},{v:'10:00 - 11:20',e:680},{v:'11:30 - 12:50',e:770},
+            {v:'01:00 - 02:20',e:860},{v:'02:30 - 03:50',e:950},{v:'03:55 - 05:15',e:1035}
+        ];
+        const match = slots.find(s => mins <= s.e);
+        if (match && timeSlotSelect) timeSlotSelect.value = match.v;
+        if (roomsResultsContainer) roomsResultsContainer.style.display = 'none';
+    }
+
+    blockBtns.forEach(btn => btn.addEventListener('click', () => {
+        blockBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked','false'); });
+        btn.classList.add('active'); btn.setAttribute('aria-checked','true');
+        selectedBlock = btn.dataset.block;
+    }));
+    dayBtns.forEach(btn => btn.addEventListener('click', () => {
+        dayBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked','false'); });
+        btn.classList.add('active'); btn.setAttribute('aria-checked','true');
+        selectedDay = btn.dataset.day;
+    }));
+
+    findRoomsBtn?.addEventListener('click', async () => {
+        const slot = timeSlotSelect?.value || '08:30 - 09:50';
+        const [sStr, eStr] = slot.split(' - ');
+        const slotStart = parseTime(sStr);
+        const slotEnd = parseTime(eStr);
+
+        if (!cachedRoomsData) {
+            findRoomsBtn.textContent = 'Scanning...';
+            findRoomsBtn.disabled = true;
+            cachedRoomsData = await fetchDecoded('data/rooms.bin') || await fetchDecoded('/data/rooms.bin');
+            findRoomsBtn.textContent = 'Find Rooms';
+            findRoomsBtn.disabled = false;
+        }
+        if (!cachedRoomsData) { showToast('Failed to load room data.'); return; }
+
+        const blockRooms = cachedRoomsData.rooms.filter(r => r.startsWith(selectedBlock + '-'));
+        const dayOcc = cachedRoomsData.occupied[selectedDay] || {};
+        const freeRooms = blockRooms.filter(room => {
+            const classes = dayOcc[room] || [];
+            return !classes.some(c => Math.max(slotStart, parseTime(c.s)) < Math.min(slotEnd, parseTime(c.e)));
+        });
+
+        roomsResultsContainer.style.display = 'block';
+        resultsCountBadge.textContent = freeRooms.length + ' Free';
+        resultsContextLabel.textContent = 'Block ' + selectedBlock + ' · ' + selectedDay.slice(0,3) + ' · ' + slot;
+        roomsGrid.innerHTML = freeRooms.length === 0
+            ? '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--text-tertiary);font-size:0.82rem">No free rooms found.</div>'
+            : freeRooms.map(r => '<div class="room-chip">' + r + '</div>').join('');
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+        if (e.key === 'Escape') {
+            if (drawerOverlay?.classList.contains('active')) { closeDrawer(); return; }
+            if (roomsModal?.classList.contains('active')) { closeRoomsModal(); return; }
+        }
+        if (e.key === 'm' || e.key === 'M') {
+            drawerOverlay?.classList.contains('active') ? closeDrawer() : openDrawer();
+        }
+    });
+})();
+
+// === PNG Timetable Exporter ===
+function generateTimetablePNG() {
+    if (!lastConfig) { showToast('Please configure a schedule first.'); return; }
     const cachedTtStr = localStorage.getItem('cachedTimetable');
-    if (!cachedTtStr) return;
+    if (!cachedTtStr) { showToast('No timetable data found.'); return; }
     const timetable = JSON.parse(cachedTtStr);
-    
-    // Scale factor for high resolution (e.g. 2x for 4K-ish clarity)
-    const scale = 3; 
-    const w = 1920 * scale;
-    const h = 1080 * scale;
-    
+    const scale = 3;
+    const w = 1920 * scale, h = 1080 * scale;
     const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d', { alpha: false });
-    
-    // Clarity colors (Clean light mode, high contrast)
-    const bg = '#ffffff';
-    const textDark = '#1a1a1a';
-    const textLight = '#555555';
-    const border = '#e2e8f0';
-    const headerBg = '#0f172a'; // Dark slate for branding header
-    const headerText = '#ffffff';
-    
-    // Fill Background
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-    
-    // 1. Draw Branding Header
-    const headerHeight = 120 * scale;
-    ctx.fillStyle = headerBg;
-    ctx.fillRect(0, 0, w, headerHeight);
-    
-    // Header Text
+
+    const bg = '#ffffff', textDark = '#1a1a1a', textLight = '#555555', border = '#e2e8f0';
+    const headerBg = '#0f172a', headerText = '#ffffff';
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
+
+    const headerH = 120 * scale;
+    ctx.fillStyle = headerBg; ctx.fillRect(0, 0, w, headerH);
     ctx.fillStyle = headerText;
-    ctx.font = \old \px system-ui, -apple-system, sans-serif\;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('FAST NUCES ISLAMABAD', 40 * scale, headerHeight / 2);
-    
-    // Batch/Section Badge
+    ctx.font = 'bold ' + (42*scale) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('FAST NUCES ISLAMABAD', 40*scale, headerH/2);
     ctx.textAlign = 'right';
-    const batchText = \ \ - \;
-    ctx.fillText(batchText, w - 40 * scale, headerHeight / 2);
-    
-    // 2. Setup Grid Dimensions
-    const padX = 40 * scale;
-    const padY = 40 * scale;
-    const topOffset = headerHeight + padY;
-    const gridW = w - (padX * 2);
-    const gridH = h - topOffset - padY;
-    
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const cols = 6;
-    const colW = gridW / cols;
-    
-    // Time bounds (08:00 to 17:30 approx = 8.0 to 17.5 = 9.5 hours duration)
-    // We'll dynamically find min and max time to scale vertically
-    let minTime = 8.5; // 8:30 AM
-    let maxTime = 17.25; // 5:15 PM
-    
-    // Adjust if classes fall outside
-    timetable.forEach(day => {
-        day.forEach(cls => {
-            const s = parseTime(cls.start_time) / 60;
-            const e = parseTime(cls.end_time) / 60;
-            if (s > 0 && s < minTime) minTime = Math.floor(s);
-            if (e > 0 && e > maxTime) maxTime = Math.ceil(e);
-        });
-    });
-    
-    const timeSpan = maxTime - minTime;
-    const dayHeaderH = 50 * scale;
-    const canvasBodyH = gridH - dayHeaderH;
-    
-    // 3. Draw Columns and Headers
+    ctx.fillText(lastConfig.batch + ' ' + lastConfig.course + ' - ' + lastConfig.section, w - 40*scale, headerH/2);
+
+    const padX = 40*scale, padY = 40*scale;
+    const topOff = headerH + padY;
+    const gridW = w - padX*2, gridH = h - topOff - padY;
+    const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const colW = gridW / 6;
+
+    let minT = 8.5, maxT = 17.25;
+    timetable.forEach(d => d.forEach(c => {
+        const s = parseTime(c.start_time)/60, e = parseTime(c.end_time)/60;
+        if (s > 0 && s < minT) minT = Math.floor(s);
+        if (e > 0 && e > maxT) maxT = Math.ceil(e);
+    }));
+    const span = maxT - minT;
+    const dayHdrH = 50*scale, bodyH = gridH - dayHdrH;
+
     ctx.textAlign = 'center';
-    for (let i = 0; i < cols; i++) {
-        const cx = padX + i * colW;
-        
-        // Day Background Alternate
-        if (i % 2 !== 0) {
-            ctx.fillStyle = '#f8fafc';
-            ctx.fillRect(cx, topOffset + dayHeaderH, colW, canvasBodyH);
-        }
-        
-        // Column Divider
-        if (i > 0) {
-            ctx.strokeStyle = border;
-            ctx.lineWidth = 2 * scale;
-            ctx.beginPath();
-            ctx.moveTo(cx, topOffset);
-            ctx.lineTo(cx, topOffset + gridH);
-            ctx.stroke();
-        }
-        
-        // Day Header
-        ctx.fillStyle = textDark;
-        ctx.font = \old \px system-ui, sans-serif\;
-        ctx.fillText(days[i], cx + colW/2, topOffset + dayHeaderH/2);
+    for (let i = 0; i < 6; i++) {
+        const cx = padX + i*colW;
+        if (i%2 !== 0) { ctx.fillStyle = '#f8fafc'; ctx.fillRect(cx, topOff+dayHdrH, colW, bodyH); }
+        if (i > 0) { ctx.strokeStyle = border; ctx.lineWidth = 2*scale; ctx.beginPath(); ctx.moveTo(cx, topOff); ctx.lineTo(cx, topOff+gridH); ctx.stroke(); }
+        ctx.fillStyle = textDark; ctx.font = 'bold ' + (22*scale) + 'px system-ui, sans-serif';
+        ctx.fillText(days[i], cx+colW/2, topOff+dayHdrH/2);
     }
-    
-    // Top border for grid body
-    ctx.strokeStyle = border;
-    ctx.lineWidth = 2 * scale;
-    ctx.beginPath();
-    ctx.moveTo(padX, topOffset + dayHeaderH);
-    ctx.lineTo(padX + gridW, topOffset + dayHeaderH);
-    ctx.stroke();
-    
-    // 4. Draw Class Cards
-    const cardMarginX = 8 * scale;
-    
-    // Clarity Card Colors (High contrast pastels)
+    ctx.strokeStyle = border; ctx.lineWidth = 2*scale;
+    ctx.beginPath(); ctx.moveTo(padX, topOff+dayHdrH); ctx.lineTo(padX+gridW, topOff+dayHdrH); ctx.stroke();
+
+    const cardM = 8*scale;
     const cardColors = [
-        { bg: '#e0f2fe', border: '#7dd3fc', text: '#0369a1' },
-        { bg: '#dcfce7', border: '#86efac', text: '#15803d' },
-        { bg: '#f3e8ff', border: '#d8b4fe', text: '#6b21a8' },
-        { bg: '#ffedd5', border: '#fdba74', text: '#c2410c' },
-        { bg: '#fce7f3', border: '#f9a8d4', text: '#be185d' }
+        {bg:'#e0f2fe',bd:'#7dd3fc',tx:'#0369a1'},{bg:'#dcfce7',bd:'#86efac',tx:'#15803d'},
+        {bg:'#f3e8ff',bd:'#d8b4fe',tx:'#6b21a8'},{bg:'#ffedd5',bd:'#fdba74',tx:'#c2410c'},
+        {bg:'#fce7f3',bd:'#f9a8d4',tx:'#be185d'}
     ];
-    
-    timetable.forEach((daySchedule, dayIdx) => {
-        const cx = padX + dayIdx * colW;
-        
-        daySchedule.forEach(cls => {
-            const startHours = parseTime(cls.start_time) / 60;
-            const endHours = parseTime(cls.end_time) / 60;
-            if (startHours === 0 || endHours === 0) return;
-            
-            const startY = topOffset + dayHeaderH + ((startHours - minTime) / timeSpan) * canvasBodyH;
-            const cardH = ((endHours - startHours) / timeSpan) * canvasBodyH;
-            
-            // Hash subject for color
+
+    timetable.forEach((daySch, di) => {
+        const cx = padX + di*colW;
+        daySch.forEach(cls => {
+            const sH = parseTime(cls.start_time)/60, eH = parseTime(cls.end_time)/60;
+            if (sH === 0 || eH === 0) return;
+            const sy = topOff+dayHdrH+((sH-minT)/span)*bodyH;
+            const ch = ((eH-sH)/span)*bodyH;
             let hash = 0;
-            for(let i=0; i<cls.subject.length; i++) hash = cls.subject.charCodeAt(i) + ((hash << 5) - hash);
-            const colorIdx = Math.abs(hash) % cardColors.length;
-            const colors = cardColors[colorIdx];
-            
-            const rectX = cx + cardMarginX;
-            const rectY = startY;
-            const rectW = colW - (cardMarginX * 2);
-            
-            // Draw Card Background
-            ctx.fillStyle = colors.bg;
-            ctx.beginPath();
-            ctx.roundRect(rectX, rectY, rectW, cardH, 8 * scale);
-            ctx.fill();
-            ctx.strokeStyle = colors.border;
-            ctx.lineWidth = 2 * scale;
-            ctx.stroke();
-            
-            // Text constraints
-            const maxTextW = rectW - (20 * scale);
-            const textCx = rectX + rectW/2;
-            
-            // Draw Time
-            ctx.fillStyle = colors.text;
-            ctx.font = \px system-ui, sans-serif\;
-            ctx.fillText(\ - \, textCx, rectY + 24 * scale);
-            
-            // Draw Subject
-            ctx.font = \old \px system-ui, sans-serif\;
-            const subjLines = wrapText(ctx, cls.subject, maxTextW);
-            const totalTextH = subjLines.length * (24 * scale);
-            let subjY = rectY + (cardH / 2) - (totalTextH / 2) + (10 * scale);
-            
-            subjLines.forEach(line => {
-                ctx.fillText(line, textCx, subjY);
-                subjY += 24 * scale;
-            });
-            
-            // Draw Room
-            ctx.font = \px system-ui, sans-serif\;
-            ctx.fillText(cls.location, textCx, rectY + cardH - 16 * scale);
+            for (let i=0;i<cls.subject.length;i++) hash = cls.subject.charCodeAt(i)+((hash<<5)-hash);
+            const col = cardColors[Math.abs(hash)%cardColors.length];
+            const rx = cx+cardM, ry = sy, rw = colW-cardM*2;
+            ctx.fillStyle = col.bg; ctx.beginPath(); ctx.roundRect(rx,ry,rw,ch,8*scale); ctx.fill();
+            ctx.strokeStyle = col.bd; ctx.lineWidth = 2*scale; ctx.stroke();
+            ctx.fillStyle = col.tx;
+            ctx.font = (14*scale)+'px system-ui,sans-serif';
+            ctx.fillText(formatTime12h(cls.start_time)+' - '+formatTime12h(cls.end_time), rx+rw/2, ry+24*scale);
+            ctx.font = 'bold '+(20*scale)+'px system-ui,sans-serif';
+            ctx.fillText(cls.subject, rx+rw/2, ry+ch/2);
+            ctx.font = (16*scale)+'px system-ui,sans-serif';
+            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-16*scale);
         });
     });
-    
-    // Export and download
+
     canvas.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const cleanName = \_\_\.replace(/[^a-zA-Z0-9]/g, '_');
-        a.download = \FAST_Timetable_\.png\;
+        const name = (lastConfig.batch+'_'+lastConfig.course+'_'+lastConfig.section).replace(/[^a-zA-Z0-9]/g,'_');
+        a.download = 'FAST_Timetable_'+name+'.png';
         a.click();
         URL.revokeObjectURL(url);
-        showToast('Timetable exported as PNG successfully!', 'info');
+        showToast('Timetable exported!', 'info');
     }, 'image/png', 1.0);
-}
-
-function wrapText(ctx, text, maxWidth) {
-    const words = text.split(' ');
-    const lines = [];
-    let currentLine = words[0];
-
-    for (let i = 1; i < words.length; i++) {
-        const word = words[i];
-        const width = ctx.measureText(currentLine + ' ' + word).width;
-        if (width < maxWidth) {
-            currentLine += ' ' + word;
-        } else {
-            lines.push(currentLine);
-            currentLine = word;
-        }
-    }
-    lines.push(currentLine);
-    return lines;
 }
