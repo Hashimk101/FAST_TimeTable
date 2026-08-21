@@ -73,6 +73,7 @@ const openBtn = document.getElementById('open-config-btn');
 const closeBtn = document.getElementById('close-config-btn');
 
 function openModal() {
+    initBatches();
     modal.classList.add('active');
     // Focus trap: move focus into modal
     const firstInput = modal.querySelector('select, input, button');
@@ -146,7 +147,7 @@ const resultsCountBadge = document.getElementById('results-count-badge');
 const resultsContextLabel = document.getElementById('results-context-label');
 
 let drawerLastFocused = null;
-let selectedRoomBlock = 'A';
+let selectedRoomBlock = 'C';
 let selectedRoomDay = 'Monday';
 
 function openDrawer() {
@@ -202,7 +203,7 @@ drawerOverlay?.addEventListener('keydown', (e) => {
 // --- Menu Navigation Actions ---
 navItemExport?.addEventListener('click', () => {
     closeDrawer();
-    showToast("Exporting timetable as high-resolution PNG...", "info", 2500);
+    generateTimetablePNG();
 });
 
 navItemRooms?.addEventListener('click', () => {
@@ -293,19 +294,60 @@ daySegmentBtns.forEach(btn => {
     });
 });
 
-findRoomsBtn?.addEventListener('click', () => {
-    const timeSlot = timeSlotSelect?.value || '08:30 - 09:50';
-    
-    // Classroom inventory per block
-    const allRoomsByBlock = {
-        'A': ['A-101', 'A-102', 'A-201', 'A-202', 'A-301', 'A-302'],
-        'B': ['B-101', 'B-102', 'B-201', 'B-202', 'B-301', 'B-302'],
-        'C': ['C-101', 'C-102', 'C-201', 'C-301', 'C-402', 'C-403', 'C-404', 'C-406', 'C-408'],
-        'D': ['D-101', 'D-102', 'D-201', 'D-314', 'D-405', 'D-414', 'D-506', 'D-507']
-    };
+let cachedRoomsData = null;
 
-    const targetRooms = allRoomsByBlock[selectedRoomBlock] || [];
-    renderFreeRoomResults(targetRooms, selectedRoomBlock, selectedRoomDay, timeSlot);
+findRoomsBtn?.addEventListener('click', async () => {
+    const timeSlot = timeSlotSelect?.value || '08:30 - 09:50';
+    const [startStr, endStr] = timeSlot.split(' - ');
+    const slotStart = parseTime(startStr);
+    const slotEnd = parseTime(endStr);
+    
+    // Fetch data if not cached
+    if (!cachedRoomsData) {
+        findRoomsBtn.innerHTML = 'Scanning...';
+        findRoomsBtn.disabled = true;
+        let data = await fetchDecoded('data/rooms.bin');
+        if (!data) data = await fetchDecoded('/data/rooms.bin');
+        cachedRoomsData = data;
+        findRoomsBtn.innerHTML = 'Find Rooms';
+        findRoomsBtn.disabled = false;
+    }
+    
+    if (!cachedRoomsData) {
+        showToast('Failed to load room data.', 'error');
+        return;
+    }
+    
+    const allRooms = cachedRoomsData.rooms;
+    const occupiedData = cachedRoomsData.occupied;
+    
+    // Filter rooms by selected block (C or D)
+    const blockRooms = allRooms.filter(r => r.startsWith(selectedRoomBlock + '-'));
+    const freeRooms = [];
+    
+    const dayOccupancy = occupiedData[selectedRoomDay] || {};
+    
+    for (const room of blockRooms) {
+        const classes = dayOccupancy[room] || [];
+        let isOccupied = false;
+        
+        for (const cls of classes) {
+            const clsStart = parseTime(cls.s);
+            const clsEnd = parseTime(cls.e);
+            
+            // Overlap condition: max(start1, start2) < min(end1, end2)
+            if (Math.max(slotStart, clsStart) < Math.min(slotEnd, clsEnd)) {
+                isOccupied = true;
+                break;
+            }
+        }
+        
+        if (!isOccupied) {
+            freeRooms.push(room);
+        }
+    }
+
+    renderFreeRoomResults(freeRooms, selectedRoomBlock, selectedRoomDay, timeSlot);
 });
 
 function renderFreeRoomResults(rooms, block, day, slot) {
@@ -454,7 +496,8 @@ function parseTimeMinutes(timeStr) {
 
 async function initBatches() {
     try {
-        const batches = await fetchDecoded('/data/batches.bin');
+        let batches = await fetchDecoded('data/batches.bin');
+        if (!batches) batches = await fetchDecoded('/data/batches.bin');
         const select = document.getElementById('batch-input');
         
         select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
@@ -686,31 +729,6 @@ const gearSvg = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" str
 
 let lastConfig = null;
 
-form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const batch = document.getElementById('batch-input').value;
-    const course = document.getElementById('course-input').value;
-    const section = document.getElementById('section-input').value.trim().toUpperCase();
-    
-    // Gather primary courses
-    const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
-    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
-    const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
-    
-    if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
-        showToast("Please select at least one course.");
-        return;
-    }
-
-    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
-    if (!batch.startsWith("MS")) {
-        if (!course || !section) {
-            showToast("Please select both a Discipline and a Section for regular batches.");
-            return;
-        }
-    }
-
 // === Timetable Builder & Sync System ===
 
 async function buildTimetableFromConfig(config, versionId = '') {
@@ -830,6 +848,32 @@ async function checkForTimetableUpdates(force = false) {
     } finally {
         isSyncing = false;
     }
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const batch = document.getElementById('batch-input').value;
+    const course = document.getElementById('course-input').value;
+    const section = document.getElementById('section-input').value.trim().toUpperCase();
+    
+    // Gather primary courses
+    const checkboxes = document.querySelectorAll('#step-2 .subject-item input[type="checkbox"]:checked');
+    const selectedSubjects = Array.from(checkboxes).map(cb => cb.value);
+    const selectedNames = Array.from(checkboxes).map(cb => cb.dataset.name);
+    
+    if (selectedSubjects.length === 0 && repeatCourses.length === 0) {
+        showToast("Please select at least one course.");
+        return;
+    }
+
+    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
+    if (!batch.startsWith("MS")) {
+        if (!course || !section) {
+            showToast("Please select both a Discipline and a Section for regular batches.");
+            return;
+        }
+    }
+
 }
 
     const btn = document.getElementById('generate-btn');
@@ -1609,3 +1653,220 @@ setInterval(() => {
 
 
 
+
+
+// ===================================================================
+// HIGH-RES PNG EXPORTER (Clarity Focused)
+// ===================================================================
+async function generateTimetablePNG() {
+    if (!lastConfig) {
+        showToast('Please configure a schedule first.');
+        return;
+    }
+    const cachedTtStr = localStorage.getItem('cachedTimetable');
+    if (!cachedTtStr) return;
+    const timetable = JSON.parse(cachedTtStr);
+    
+    // Scale factor for high resolution (e.g. 2x for 4K-ish clarity)
+    const scale = 3; 
+    const w = 1920 * scale;
+    const h = 1080 * scale;
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    
+    // Clarity colors (Clean light mode, high contrast)
+    const bg = '#ffffff';
+    const textDark = '#1a1a1a';
+    const textLight = '#555555';
+    const border = '#e2e8f0';
+    const headerBg = '#0f172a'; // Dark slate for branding header
+    const headerText = '#ffffff';
+    
+    // Fill Background
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    
+    // 1. Draw Branding Header
+    const headerHeight = 120 * scale;
+    ctx.fillStyle = headerBg;
+    ctx.fillRect(0, 0, w, headerHeight);
+    
+    // Header Text
+    ctx.fillStyle = headerText;
+    ctx.font = \old \px system-ui, -apple-system, sans-serif\;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FAST NUCES ISLAMABAD', 40 * scale, headerHeight / 2);
+    
+    // Batch/Section Badge
+    ctx.textAlign = 'right';
+    const batchText = \ \ - \;
+    ctx.fillText(batchText, w - 40 * scale, headerHeight / 2);
+    
+    // 2. Setup Grid Dimensions
+    const padX = 40 * scale;
+    const padY = 40 * scale;
+    const topOffset = headerHeight + padY;
+    const gridW = w - (padX * 2);
+    const gridH = h - topOffset - padY;
+    
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const cols = 6;
+    const colW = gridW / cols;
+    
+    // Time bounds (08:00 to 17:30 approx = 8.0 to 17.5 = 9.5 hours duration)
+    // We'll dynamically find min and max time to scale vertically
+    let minTime = 8.5; // 8:30 AM
+    let maxTime = 17.25; // 5:15 PM
+    
+    // Adjust if classes fall outside
+    timetable.forEach(day => {
+        day.forEach(cls => {
+            const s = parseTime(cls.start_time) / 60;
+            const e = parseTime(cls.end_time) / 60;
+            if (s > 0 && s < minTime) minTime = Math.floor(s);
+            if (e > 0 && e > maxTime) maxTime = Math.ceil(e);
+        });
+    });
+    
+    const timeSpan = maxTime - minTime;
+    const dayHeaderH = 50 * scale;
+    const canvasBodyH = gridH - dayHeaderH;
+    
+    // 3. Draw Columns and Headers
+    ctx.textAlign = 'center';
+    for (let i = 0; i < cols; i++) {
+        const cx = padX + i * colW;
+        
+        // Day Background Alternate
+        if (i % 2 !== 0) {
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(cx, topOffset + dayHeaderH, colW, canvasBodyH);
+        }
+        
+        // Column Divider
+        if (i > 0) {
+            ctx.strokeStyle = border;
+            ctx.lineWidth = 2 * scale;
+            ctx.beginPath();
+            ctx.moveTo(cx, topOffset);
+            ctx.lineTo(cx, topOffset + gridH);
+            ctx.stroke();
+        }
+        
+        // Day Header
+        ctx.fillStyle = textDark;
+        ctx.font = \old \px system-ui, sans-serif\;
+        ctx.fillText(days[i], cx + colW/2, topOffset + dayHeaderH/2);
+    }
+    
+    // Top border for grid body
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.moveTo(padX, topOffset + dayHeaderH);
+    ctx.lineTo(padX + gridW, topOffset + dayHeaderH);
+    ctx.stroke();
+    
+    // 4. Draw Class Cards
+    const cardMarginX = 8 * scale;
+    
+    // Clarity Card Colors (High contrast pastels)
+    const cardColors = [
+        { bg: '#e0f2fe', border: '#7dd3fc', text: '#0369a1' },
+        { bg: '#dcfce7', border: '#86efac', text: '#15803d' },
+        { bg: '#f3e8ff', border: '#d8b4fe', text: '#6b21a8' },
+        { bg: '#ffedd5', border: '#fdba74', text: '#c2410c' },
+        { bg: '#fce7f3', border: '#f9a8d4', text: '#be185d' }
+    ];
+    
+    timetable.forEach((daySchedule, dayIdx) => {
+        const cx = padX + dayIdx * colW;
+        
+        daySchedule.forEach(cls => {
+            const startHours = parseTime(cls.start_time) / 60;
+            const endHours = parseTime(cls.end_time) / 60;
+            if (startHours === 0 || endHours === 0) return;
+            
+            const startY = topOffset + dayHeaderH + ((startHours - minTime) / timeSpan) * canvasBodyH;
+            const cardH = ((endHours - startHours) / timeSpan) * canvasBodyH;
+            
+            // Hash subject for color
+            let hash = 0;
+            for(let i=0; i<cls.subject.length; i++) hash = cls.subject.charCodeAt(i) + ((hash << 5) - hash);
+            const colorIdx = Math.abs(hash) % cardColors.length;
+            const colors = cardColors[colorIdx];
+            
+            const rectX = cx + cardMarginX;
+            const rectY = startY;
+            const rectW = colW - (cardMarginX * 2);
+            
+            // Draw Card Background
+            ctx.fillStyle = colors.bg;
+            ctx.beginPath();
+            ctx.roundRect(rectX, rectY, rectW, cardH, 8 * scale);
+            ctx.fill();
+            ctx.strokeStyle = colors.border;
+            ctx.lineWidth = 2 * scale;
+            ctx.stroke();
+            
+            // Text constraints
+            const maxTextW = rectW - (20 * scale);
+            const textCx = rectX + rectW/2;
+            
+            // Draw Time
+            ctx.fillStyle = colors.text;
+            ctx.font = \px system-ui, sans-serif\;
+            ctx.fillText(\ - \, textCx, rectY + 24 * scale);
+            
+            // Draw Subject
+            ctx.font = \old \px system-ui, sans-serif\;
+            const subjLines = wrapText(ctx, cls.subject, maxTextW);
+            const totalTextH = subjLines.length * (24 * scale);
+            let subjY = rectY + (cardH / 2) - (totalTextH / 2) + (10 * scale);
+            
+            subjLines.forEach(line => {
+                ctx.fillText(line, textCx, subjY);
+                subjY += 24 * scale;
+            });
+            
+            // Draw Room
+            ctx.font = \px system-ui, sans-serif\;
+            ctx.fillText(cls.location, textCx, rectY + cardH - 16 * scale);
+        });
+    });
+    
+    // Export and download
+    canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const cleanName = \_\_\.replace(/[^a-zA-Z0-9]/g, '_');
+        a.download = \FAST_Timetable_\.png\;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Timetable exported as PNG successfully!', 'info');
+    }, 'image/png', 1.0);
+}
+
+function wrapText(ctx, text, maxWidth) {
+    const words = text.split(' ');
+    const lines = [];
+    let currentLine = words[0];
+
+    for (let i = 1; i < words.length; i++) {
+        const word = words[i];
+        const width = ctx.measureText(currentLine + ' ' + word).width;
+        if (width < maxWidth) {
+            currentLine += ' ' + word;
+        } else {
+            lines.push(currentLine);
+            currentLine = word;
+        }
+    }
+    lines.push(currentLine);
+    return lines;
+}

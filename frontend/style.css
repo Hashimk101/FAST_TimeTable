@@ -2106,6 +2106,7 @@ kbd {
   border-radius: var(--r-md);
 }
 
+.segmented-grid-2 { grid-template-columns: repeat(2, 1fr); }
 .segmented-grid-4 {
   grid-template-columns: repeat(4, 1fr);
 }
