@@ -975,7 +975,6 @@ let lastTimetableData = null; // Store for mobile re-renders
 let mobileSelectedDay = null; // null = today. 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
 
 // Wire mobile buttons to existing desktop functionality
-document.getElementById('mobile-config-btn')?.addEventListener('click', () => openModal());
 document.getElementById('mobile-settings-btn')?.addEventListener('click', () => openModal());
 
 // Mobile theme toggle syncs with desktop toggle
@@ -1638,7 +1637,7 @@ function generateTimetablePNG() {
         const cx = padX + i*colW;
         if (i%2 !== 0) { ctx.fillStyle = '#f8fafc'; ctx.fillRect(cx, topOff+dayHdrH, colW, bodyH); }
         if (i > 0) { ctx.strokeStyle = border; ctx.lineWidth = 2*scale; ctx.beginPath(); ctx.moveTo(cx, topOff); ctx.lineTo(cx, topOff+gridH); ctx.stroke(); }
-        ctx.fillStyle = textDark; ctx.font = 'bold ' + (22*scale) + 'px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = textDark; ctx.font = 'bold ' + (28*scale) + 'px system-ui, -apple-system, sans-serif';
         ctx.fillText(days[i], cx+colW/2, topOff+dayHdrH/2);
     }
     ctx.strokeStyle = border; ctx.lineWidth = 2*scale;
@@ -1695,13 +1694,13 @@ function generateTimetablePNG() {
             ctx.textBaseline = 'top';
             
             // Draw Time (top)
-            ctx.font = (14*scale)+'px system-ui, -apple-system, sans-serif';
-            ctx.fillText(format12(cls.start_time)+' - '+format12(cls.end_time), rx+rw/2, ry+12*scale);
+            ctx.font = '600 '+(18*scale)+'px system-ui, -apple-system, sans-serif';
+            ctx.fillText(format12(cls.start_time)+' - '+format12(cls.end_time), rx+rw/2, ry+16*scale);
             
             // Draw Subject (center wrapped)
-            ctx.font = 'bold '+(20*scale)+'px system-ui, -apple-system, sans-serif';
+            ctx.font = 'bold '+(28*scale)+'px system-ui, -apple-system, sans-serif';
             const lines = wrapText(ctx, cls.subject, rw - 24*scale);
-            const lh = 24*scale;
+            const lh = 34*scale;
             const textBlockH = lines.length * lh;
             let startY = ry + ch/2 - textBlockH/2;
             lines.forEach(line => {
@@ -1710,9 +1709,9 @@ function generateTimetablePNG() {
             });
             
             // Draw Room (bottom)
-            ctx.font = (16*scale)+'px system-ui, -apple-system, sans-serif';
+            ctx.font = '500 '+(20*scale)+'px system-ui, -apple-system, sans-serif';
             ctx.textBaseline = 'bottom';
-            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-12*scale);
+            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-16*scale);
         });
     });
 
