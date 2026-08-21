@@ -243,6 +243,7 @@ function parseTimeMinutes(timeStr) {
     try {
         let [h, m] = timeStr.split(':').map(Number);
         if (h >= 1 && h <= 7) h += 12;
+        if (h === 8 && m < 30) h += 12; // 08:05 PM vs 08:30 AM
         return h * 60 + m;
     } catch (e) {
         return 0;
@@ -834,11 +835,13 @@ function updateStatusBar(batch, course, section, subjects, names) {
 
 // === Time Parsing ===
 function parseTime(timeStr) {
+    if (!timeStr) return 0;
     const parts = timeStr.split(':');
     if (parts.length < 2) return 8;
     let h = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10);
     if (h >= 1 && h <= 7) h += 12;
+    if (h === 8 && m < 30) h += 12; // 08:05 PM vs 08:30 AM
     return h + (m / 60);
 }
 
@@ -1011,6 +1014,7 @@ function formatTime12h(timeStr) {
     const m = parseInt(parts[1] || '0', 10);
     // Map ambiguous 1-7 to PM (university classes)
     if (h >= 1 && h <= 7) h += 12;
+    if (h === 8 && m < 30) h += 12; // 08:05 PM vs 08:30 AM
     const ampm = h >= 12 ? 'PM' : 'AM';
     const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
     const mStr = m.toString().padStart(2, '0');
@@ -1646,10 +1650,10 @@ function generateTimetablePNG() {
 
     function format12(timeStr) {
         if (!timeStr) return '';
-        const [h,m] = timeStr.split(':');
-        const H = parseInt(h,10);
-        const ampm = H >= 12 ? 'PM' : 'AM';
-        const H12 = H % 12 || 12;
+        const realH = Math.floor(parseTime(timeStr));
+        const [_, m] = timeStr.split(':');
+        const ampm = realH >= 12 ? 'PM' : 'AM';
+        const H12 = realH % 12 || 12;
         return `${H12}:${m} ${ampm}`;
     }
 
