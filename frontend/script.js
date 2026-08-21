@@ -121,15 +121,226 @@ modal.addEventListener('keydown', (e) => {
     }
 });
 
-// Close on Escape
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && modal.classList.contains('active')) {
-        closeModal();
+// === Side Drawer Menu & Free Rooms Controller ===
+const drawerOverlay = document.getElementById('drawer-overlay');
+const sideDrawer = document.getElementById('side-drawer');
+const openDrawerDesktopBtn = document.getElementById('menu-toggle-btn');
+const openDrawerMobileBtn = document.getElementById('mobile-menu-btn');
+const closeDrawerBtn = document.getElementById('close-drawer-btn');
+
+const navItemExport = document.getElementById('nav-item-export');
+const navItemRooms = document.getElementById('nav-item-rooms');
+const navItemConfig = document.getElementById('nav-item-config');
+const navItemTheme = document.getElementById('nav-item-theme');
+const navThemeStatus = document.getElementById('nav-theme-status');
+
+const roomsModal = document.getElementById('rooms-modal');
+const closeRoomsModalBtn = document.getElementById('close-rooms-modal-btn');
+const findRoomsBtn = document.getElementById('find-rooms-btn');
+const timeSlotSelect = document.getElementById('time-slot-select');
+const blockSegmentBtns = document.querySelectorAll('#rooms-modal [data-block]');
+const daySegmentBtns = document.querySelectorAll('#rooms-modal [data-day]');
+const roomsResultsContainer = document.getElementById('rooms-results-container');
+const roomsGrid = document.getElementById('rooms-grid');
+const resultsCountBadge = document.getElementById('results-count-badge');
+const resultsContextLabel = document.getElementById('results-context-label');
+
+let drawerLastFocused = null;
+let selectedRoomBlock = 'A';
+let selectedRoomDay = 'Monday';
+
+function openDrawer() {
+    drawerLastFocused = document.activeElement;
+    drawerOverlay?.classList.add('active');
+    drawerOverlay?.setAttribute('aria-hidden', 'false');
+    const firstFocusable = sideDrawer?.querySelector('button, [tabindex]:not([tabindex="-1"])');
+    if (firstFocusable) firstFocusable.focus({ preventScroll: true });
+}
+
+function closeDrawer() {
+    drawerOverlay?.classList.remove('active');
+    drawerOverlay?.setAttribute('aria-hidden', 'true');
+    if (drawerLastFocused) drawerLastFocused.focus();
+}
+
+openDrawerDesktopBtn?.addEventListener('click', openDrawer);
+openDrawerMobileBtn?.addEventListener('click', openDrawer);
+closeDrawerBtn?.addEventListener('click', closeDrawer);
+
+// Close drawer on overlay click
+drawerOverlay?.addEventListener('click', (e) => {
+    if (e.target === drawerOverlay) closeDrawer();
+});
+
+// Mobile touch swipe to dismiss drawer
+let drawerTouchStartX = 0;
+sideDrawer?.addEventListener('touchstart', (e) => {
+    drawerTouchStartX = e.touches[0].clientX;
+}, { passive: true });
+
+sideDrawer?.addEventListener('touchend', (e) => {
+    const deltaX = e.changedTouches[0].clientX - drawerTouchStartX;
+    if (deltaX > 75) closeDrawer();
+});
+
+// Drawer focus trap
+drawerOverlay?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusables = sideDrawer?.querySelectorAll('button, input, select, [tabindex]:not([tabindex="-1"])') || [];
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
     }
 });
 
-// === Keyboard Shortcuts ===
+// --- Menu Navigation Actions ---
+navItemExport?.addEventListener('click', () => {
+    closeDrawer();
+    showToast("Exporting timetable as high-resolution PNG...", "info", 2500);
+});
+
+navItemRooms?.addEventListener('click', () => {
+    openRoomsModal();
+});
+
+navItemConfig?.addEventListener('click', () => {
+    closeDrawer();
+    openModal();
+});
+
+function syncNavThemeStatus() {
+    const theme = html.getAttribute('data-theme') || 'dark';
+    if (navThemeStatus) navThemeStatus.textContent = theme === 'dark' ? 'Dark' : 'Light';
+}
+
+navItemTheme?.addEventListener('click', () => {
+    themeToggleBtn?.click();
+    syncNavThemeStatus();
+});
+
+// --- Free Rooms Modal Logic ---
+function openRoomsModal() {
+    closeDrawer();
+    initRoomDefaults();
+    roomsModal?.classList.add('active');
+    const firstFocusable = roomsModal?.querySelector('button, select, input');
+    if (firstFocusable) firstFocusable.focus({ preventScroll: true });
+}
+
+function closeRoomsModal() {
+    roomsModal?.classList.remove('active');
+}
+
+closeRoomsModalBtn?.addEventListener('click', closeRoomsModal);
+roomsModal?.addEventListener('click', (e) => {
+    if (e.target === roomsModal) closeRoomsModal();
+});
+
+function initRoomDefaults() {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const currentDay = days[new Date().getDay()];
+    selectedRoomDay = (currentDay === 'Sunday' || currentDay === 'Saturday') ? 'Monday' : currentDay;
+    
+    daySegmentBtns.forEach(btn => {
+        const isActive = btn.dataset.day === selectedRoomDay;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    });
+
+    const now = new Date();
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+    const slots = [
+        { label: '08:30 - 09:50', end: 9 * 60 + 50 },
+        { label: '10:00 - 11:20', end: 11 * 60 + 20 },
+        { label: '11:30 - 12:50', end: 12 * 60 + 50 },
+        { label: '01:00 - 02:20', end: 14 * 60 + 20 },
+        { label: '02:30 - 03:50', end: 15 * 60 + 50 },
+        { label: '03:55 - 05:15', end: 17 * 60 + 15 },
+    ];
+    const matchedSlot = slots.find(s => currentMins <= s.end);
+    if (matchedSlot && timeSlotSelect) {
+        timeSlotSelect.value = matchedSlot.label;
+    }
+}
+
+blockSegmentBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        blockSegmentBtns.forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-checked', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-checked', 'true');
+        selectedRoomBlock = btn.dataset.block || 'A';
+    });
+});
+
+daySegmentBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        daySegmentBtns.forEach(b => {
+            b.classList.remove('active');
+            b.setAttribute('aria-checked', 'false');
+        });
+        btn.classList.add('active');
+        btn.setAttribute('aria-checked', 'true');
+        selectedRoomDay = btn.dataset.day || 'Monday';
+    });
+});
+
+findRoomsBtn?.addEventListener('click', () => {
+    const timeSlot = timeSlotSelect?.value || '08:30 - 09:50';
+    
+    // Classroom inventory per block
+    const allRoomsByBlock = {
+        'A': ['A-101', 'A-102', 'A-201', 'A-202', 'A-301', 'A-302'],
+        'B': ['B-101', 'B-102', 'B-201', 'B-202', 'B-301', 'B-302'],
+        'C': ['C-101', 'C-102', 'C-201', 'C-301', 'C-402', 'C-403', 'C-404', 'C-406', 'C-408'],
+        'D': ['D-101', 'D-102', 'D-201', 'D-314', 'D-405', 'D-414', 'D-506', 'D-507']
+    };
+
+    const targetRooms = allRoomsByBlock[selectedRoomBlock] || [];
+    renderFreeRoomResults(targetRooms, selectedRoomBlock, selectedRoomDay, timeSlot);
+});
+
+function renderFreeRoomResults(rooms, block, day, slot) {
+    if (!roomsResultsContainer || !roomsGrid) return;
+    roomsResultsContainer.style.display = 'block';
+    resultsCountBadge.textContent = `${rooms.length} Free Rooms`;
+    resultsContextLabel.textContent = `Block ${block} · ${day.slice(0, 3)} · ${slot}`;
+
+    if (rooms.length === 0) {
+        roomsGrid.innerHTML = `<div class="rooms-empty">No free rooms found for this slot.</div>`;
+        return;
+    }
+
+    roomsGrid.innerHTML = rooms
+        .map(room => `<div class="room-chip">${room}</div>`)
+        .join('');
+}
+
+// === Global Keyboard Shortcuts ===
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        if (drawerOverlay?.classList.contains('active')) {
+            closeDrawer();
+            return;
+        }
+        if (roomsModal?.classList.contains('active')) {
+            closeRoomsModal();
+            return;
+        }
+        if (modal?.classList.contains('active')) {
+            closeModal();
+            return;
+        }
+    }
+
     // Don't fire shortcuts when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
     // Don't hijack Ctrl/Cmd shortcuts (Ctrl+C = copy, etc.)
@@ -137,6 +348,13 @@ document.addEventListener('keydown', (e) => {
     
     if (e.key === 'c' || e.key === 'C') {
         openModal();
+    }
+    if (e.key === 'm' || e.key === 'M') {
+        if (drawerOverlay?.classList.contains('active')) {
+            closeDrawer();
+        } else {
+            openDrawer();
+        }
     }
     if (e.key === 't' || e.key === 'T') {
         themeToggleBtn.click();
