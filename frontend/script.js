@@ -1583,83 +1583,51 @@ setInterval(() => {
     });
 })();
 
-// === PNG Timetable Exporter ===
+// === PNG Timetable Exporter (Mobile Wallpaper & High-Res Portrait Edition) ===
 function generateTimetablePNG() {
-    if (!lastConfig) { showToast('Please configure a schedule first.'); return; }
+    if (!lastConfig) { showToast('Please configure a schedule first.', 'error'); return; }
     const cachedTtStr = localStorage.getItem('cachedTimetable');
-    if (!cachedTtStr) { showToast('No timetable data found.'); return; }
+    if (!cachedTtStr) { showToast('No timetable data found.', 'error'); return; }
     const timetable = JSON.parse(cachedTtStr);
-    const scale = 3;
-    const w = 1920 * scale, h = 1080 * scale;
+
+    const scale = 2; // 2x multiplier on 1080x2340 = 2160x4680 (ultra crisp retina mobile wallpaper)
+    const baseW = 1080, baseH = 2340;
+    const w = baseW * scale, h = baseH * scale;
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;
     const ctx = canvas.getContext('2d', { alpha: false });
 
-    // Reset baseline just in case
-    ctx.textBaseline = 'alphabetic';
-
-    const bg = '#ffffff', textDark = '#1a1a1a', textLight = '#555555', border = '#e2e8f0';
-    const headerBg = '#0f172a', headerText = '#ffffff';
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h);
-
-    const headerH = 120 * scale;
-    ctx.fillStyle = headerBg; ctx.fillRect(0, 0, w, headerH);
-    ctx.fillStyle = headerText;
-    ctx.font = 'bold ' + (42*scale) + 'px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('FAST NUCES ISLAMABAD', 40*scale, headerH/2);
-    ctx.textAlign = 'right';
-    const nameParts = [lastConfig.batch, lastConfig.course, lastConfig.section].filter(p => p && p.trim() !== '');
-    const nameStr = nameParts.length > 2 
-        ? `${nameParts[0]} ${nameParts[1]} - ${nameParts[2]}`
-        : nameParts.join(' ');
-    ctx.fillText(nameStr, w - 40*scale, headerH/2);
-
-    const padX = 40*scale, padY = 40*scale;
-    const topOff = headerH + padY;
-    const gridW = w - padX*2, gridH = h - topOff - padY;
-    const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const colW = gridW / 6;
-
-    let minT = 8.5, maxT = 17.25;
-    timetable.forEach(d => d.forEach(c => {
-        // parseTime already returns decimal hours (e.g., 8.5)
-        const s = parseTime(c.start_time), e = parseTime(c.end_time);
-        if (s > 0 && s < minT) minT = Math.floor(s);
-        if (e > 0 && e > maxT) maxT = Math.ceil(e);
-    }));
-    const span = maxT - minT;
-    const dayHdrH = 50*scale, bodyH = gridH - dayHdrH;
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    for (let i = 0; i < 6; i++) {
-        const cx = padX + i*colW;
-        if (i%2 !== 0) { ctx.fillStyle = '#f8fafc'; ctx.fillRect(cx, topOff+dayHdrH, colW, bodyH); }
-        if (i > 0) { ctx.strokeStyle = border; ctx.lineWidth = 2*scale; ctx.beginPath(); ctx.moveTo(cx, topOff); ctx.lineTo(cx, topOff+gridH); ctx.stroke(); }
-        ctx.fillStyle = textDark; ctx.font = 'bold ' + (28*scale) + 'px system-ui, -apple-system, sans-serif';
-        ctx.fillText(days[i], cx+colW/2, topOff+dayHdrH/2);
+    // Safe polyfill for roundRect on older engines
+    if (!ctx.roundRect) {
+        ctx.roundRect = function(rx, ry, rw, rh, rad) {
+            this.rect(rx, ry, rw, rh);
+            return this;
+        };
     }
-    ctx.strokeStyle = border; ctx.lineWidth = 2*scale;
-    ctx.beginPath(); ctx.moveTo(padX, topOff+dayHdrH); ctx.lineTo(padX+gridW, topOff+dayHdrH); ctx.stroke();
 
-    const cardM = 8*scale;
-    const cardColors = [
-        {bg:'#e0f2fe',bd:'#7dd3fc',tx:'#0369a1'},{bg:'#dcfce7',bd:'#86efac',tx:'#15803d'},
-        {bg:'#f3e8ff',bd:'#d8b4fe',tx:'#6b21a8'},{bg:'#ffedd5',bd:'#fdba74',tx:'#c2410c'},
-        {bg:'#fce7f3',bd:'#f9a8d4',tx:'#be185d'}
-    ];
+    // Background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
 
+    const padX = 36 * scale, padY = 48 * scale;
+
+    // Helper functions
     function format12(timeStr) {
         if (!timeStr) return '';
         const realH = Math.floor(parseTime(timeStr));
-        const [_, m] = timeStr.split(':');
+        const parts = timeStr.split(':');
+        const m = parts[1] || '00';
         const ampm = realH >= 12 ? 'PM' : 'AM';
         const H12 = realH % 12 || 12;
         return `${H12}:${m} ${ampm}`;
     }
 
-    // Wrap text helper
+    function formatHour12(hourNum) {
+        const ampm = hourNum >= 12 ? 'PM' : 'AM';
+        const H12 = hourNum % 12 || 12;
+        return `${H12}:00 ${ampm}`;
+    }
+
     function wrapText(context, text, maxWidth) {
         const words = text.split(' ');
         const lines = [];
@@ -1674,54 +1642,326 @@ function generateTimetablePNG() {
         return lines;
     }
 
-    timetable.forEach((daySch, di) => {
-        const cx = padX + di*colW;
-        daySch.forEach(cls => {
+    // 1. TOP HEADER CARD (Dark Theme)
+    const headerX = padX, headerY = padY;
+    const headerW = w - padX * 2, headerH = 130 * scale;
+
+    ctx.fillStyle = '#0b0f19';
+    ctx.beginPath();
+    ctx.roundRect(headerX, headerY, headerW, headerH, 20 * scale);
+    ctx.fill();
+
+    // Geometric Flower/Crest Icon
+    const iconCenterX = headerX + 44 * scale;
+    const iconCenterY = headerY + headerH / 2;
+    const iconR = 18 * scale;
+    ctx.save();
+    ctx.strokeStyle = '#a78bfa';
+    ctx.lineWidth = 1.75 * scale;
+    for (let angle = 0; angle < Math.PI; angle += Math.PI / 3) {
+        ctx.beginPath();
+        ctx.ellipse(iconCenterX, iconCenterY, iconR, iconR * 0.45, angle, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    // Header Title
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold ' + (22 * scale) + 'px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('FAST NUCES ISLAMABAD', headerX + 80 * scale, iconCenterY);
+
+    // Header Right Badge (Batch / Section)
+    const nameParts = [lastConfig.batch, lastConfig.course, lastConfig.section].filter(p => p && p.trim() !== '');
+    const nameStr = nameParts.length > 2 
+        ? `${nameParts[0]} ${nameParts[1]} - ${nameParts[2]}`
+        : nameParts.join(' ');
+
+    ctx.font = 'bold ' + (18 * scale) + 'px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    const badgeTextW = ctx.measureText(nameStr).width;
+    const badgeW = badgeTextW + (54 * scale);
+    const badgeH = 46 * scale;
+    const badgeX = headerX + headerW - badgeW - (20 * scale);
+    const badgeY = headerY + (headerH - badgeH) / 2;
+
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12 * scale);
+    ctx.fill();
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.stroke();
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'left';
+    ctx.fillText(nameStr, badgeX + (16 * scale), headerY + headerH / 2);
+
+    // Small Calendar Icon on Badge
+    const calX = badgeX + badgeW - (28 * scale);
+    const calY = headerY + headerH / 2 - (8 * scale);
+    ctx.strokeStyle = '#94a3b8';
+    ctx.lineWidth = 1.75 * scale;
+    ctx.strokeRect(calX, calY, 16 * scale, 16 * scale);
+    ctx.beginPath();
+    ctx.moveTo(calX, calY + 5 * scale);
+    ctx.lineTo(calX + 16 * scale, calY + 5 * scale);
+    ctx.stroke();
+
+    // 2. FOOTER CARD (Stats & Quote)
+    const footerW = w - padX * 2;
+    const footerH = 120 * scale;
+    const footerX = padX;
+    const footerY = h - padY - footerH;
+
+    // Count statistics
+    let theoryCount = 0, labCount = 0;
+    timetable.forEach(day => day.forEach(cls => {
+        const isLab = cls.subject.toLowerCase().includes('lab') || (parseTime(cls.end_time) - parseTime(cls.start_time) >= 2.5);
+        if (isLab) labCount++; else theoryCount++;
+    }));
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.roundRect(footerX, footerY, footerW, footerH, 18 * scale);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.stroke();
+
+    // Legend items on left
+    let legendCursorX = footerX + 24 * scale;
+    const legendCenterY = footerY + footerH / 2;
+
+    // Theory Indicator
+    ctx.fillStyle = '#a855f7';
+    ctx.beginPath();
+    ctx.arc(legendCursorX, legendCenterY - 10 * scale, 6 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold ' + (15 * scale) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Theory', legendCursorX + 12 * scale, legendCenterY - 10 * scale);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '500 ' + (13 * scale) + 'px system-ui, sans-serif';
+    ctx.fillText(theoryCount + ' Classes', legendCursorX + 12 * scale, legendCenterY + 12 * scale);
+    legendCursorX += 140 * scale;
+
+    // Lab Indicator
+    if (labCount > 0) {
+        ctx.fillStyle = '#f97316';
+        ctx.beginPath();
+        ctx.arc(legendCursorX, legendCenterY - 10 * scale, 6 * scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#1e293b';
+        ctx.font = 'bold ' + (15 * scale) + 'px system-ui, sans-serif';
+        ctx.fillText('Lab', legendCursorX + 12 * scale, legendCenterY - 10 * scale);
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 ' + (13 * scale) + 'px system-ui, sans-serif';
+        ctx.fillText(labCount + ' ' + (labCount === 1 ? 'Class' : 'Classes'), legendCursorX + 12 * scale, legendCenterY + 12 * scale);
+    }
+
+    // Motivational Quote on right
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 ' + (16 * scale) + 'px system-ui, sans-serif';
+    ctx.fillText('✨ Stay consistent, great things take time!', footerX + footerW - 24 * scale, legendCenterY);
+
+    // 3. TIMETABLE GRID DIMENSIONS
+    const gridTop = headerY + headerH + 28 * scale;
+    const gridBottom = footerY - 24 * scale;
+    const gridH = gridBottom - gridTop;
+    const gridW = w - padX * 2;
+
+    const timeColW = 100 * scale;
+    const days = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+    const dayColW = (gridW - timeColW) / 6;
+
+    // Determine time range
+    let minHour = 8;
+    let maxHour = 18; // Default 6:00 PM
+    timetable.forEach(d => d.forEach(c => {
+        const s = parseTime(c.start_time), e = parseTime(c.end_time);
+        if (s > 0 && Math.floor(s) < minHour) minHour = Math.floor(s);
+        if (e > 0 && Math.ceil(e) > maxHour) maxHour = Math.ceil(e);
+    }));
+
+    const totalHours = maxHour - minHour;
+    const dayHdrH = 56 * scale;
+    const bodyH = gridH - dayHdrH;
+    const hourH = bodyH / totalHours;
+
+    // Top Header: TIME Pill + Days
+    const timePillW = 76 * scale, timePillH = 34 * scale;
+    const timePillX = padX + (timeColW - timePillW) / 2;
+    const timePillY = gridTop + (dayHdrH - timePillH) / 2;
+    ctx.fillStyle = '#f1f5f9';
+    ctx.beginPath();
+    ctx.roundRect(timePillX, timePillY, timePillW, timePillH, 10 * scale);
+    ctx.fill();
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold ' + (14 * scale) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('TIME', timePillX + timePillW / 2, timePillY + timePillH / 2);
+
+    // Day Headers
+    ctx.fillStyle = '#334155';
+    ctx.font = 'bold ' + (15 * scale) + 'px system-ui, sans-serif';
+    for (let i = 0; i < 6; i++) {
+        const cx = padX + timeColW + i * dayColW;
+        ctx.fillText(days[i], cx + dayColW / 2, gridTop + dayHdrH / 2);
+    }
+
+    // Grid Divider under headers
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(padX, gridTop + dayHdrH);
+    ctx.lineTo(padX + gridW, gridTop + dayHdrH);
+    ctx.stroke();
+
+    // Time Axis and Horizontal Hour Grid Lines
+    for (let hIndex = 0; hIndex <= totalHours; hIndex++) {
+        const curHour = minHour + hIndex;
+        const lineY = gridTop + dayHdrH + hIndex * hourH;
+
+        // Left Time Label
+        ctx.fillStyle = '#64748b';
+        ctx.font = 'bold ' + (14 * scale) + 'px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(formatHour12(curHour), padX + timeColW / 2, lineY);
+
+        // Grid Horizontal Line across days
+        ctx.strokeStyle = '#f1f5f9';
+        ctx.lineWidth = 1.25 * scale;
+        ctx.beginPath();
+        ctx.moveTo(padX + timeColW, lineY);
+        ctx.lineTo(padX + gridW, lineY);
+        ctx.stroke();
+    }
+
+    // Vertical day separators
+    for (let i = 1; i < 6; i++) {
+        const sepX = padX + timeColW + i * dayColW;
+        ctx.strokeStyle = '#f8fafc';
+        ctx.lineWidth = 1.25 * scale;
+        ctx.beginPath();
+        ctx.moveTo(sepX, gridTop + dayHdrH);
+        ctx.lineTo(sepX, gridBottom);
+        ctx.stroke();
+    }
+
+    // 4. COLOR PALETTES FOR CLASS CARDS
+    const palettes = [
+        { bg: '#f5f3ff', border: '#ddd6fe', title: '#4c1d95', pillBg: '#ede9fe', pillText: '#6d28d9', room: '#5b21b6' }, // Lavender Theory
+        { bg: '#fdf2f8', border: '#fbcfe8', title: '#831843', pillBg: '#fce7f3', pillText: '#be185d', room: '#9d174d' }, // Rose Pink
+        { bg: '#eff6ff', border: '#bfdbfe', title: '#1e3a8a', pillBg: '#dbeafe', pillText: '#1d4ed8', room: '#1e40af' }, // Sky Blue
+        { bg: '#f0fdf4', border: '#bbf7d0', title: '#14532d', pillBg: '#dcfce7', pillText: '#15803d', room: '#166534' }  // Mint Green
+    ];
+    const labPalette = { bg: '#fff7ed', border: '#fed7aa', title: '#7c2d12', pillBg: '#ffedd5', pillText: '#c2410c', room: '#9a3412' }; // Warm Peach Lab
+
+    // 5. DRAW CLASS CARDS
+    timetable.forEach((daySchedule, di) => {
+        const colX = padX + timeColW + di * dayColW;
+
+        daySchedule.forEach(cls => {
             const sH = parseTime(cls.start_time), eH = parseTime(cls.end_time);
             if (sH === 0 || eH === 0) return;
-            const sy = topOff+dayHdrH+((sH-minT)/span)*bodyH;
-            const ch = ((eH-sH)/span)*bodyH;
-            
-            let hash = 0;
-            for (let i=0;i<cls.subject.length;i++) hash = cls.subject.charCodeAt(i)+((hash<<5)-hash);
-            const col = cardColors[Math.abs(hash)%cardColors.length];
-            const rx = cx+cardM, ry = sy, rw = colW-cardM*2;
-            
-            ctx.fillStyle = col.bg; ctx.beginPath(); ctx.roundRect(rx,ry,rw,ch,8*scale); ctx.fill();
-            ctx.strokeStyle = col.bd; ctx.lineWidth = 2*scale; ctx.stroke();
-            
-            ctx.fillStyle = col.tx;
-            ctx.textBaseline = 'top';
-            
-            // Draw Time (top)
-            ctx.font = '600 '+(18*scale)+'px system-ui, -apple-system, sans-serif';
-            ctx.fillText(format12(cls.start_time)+' - '+format12(cls.end_time), rx+rw/2, ry+16*scale);
-            
-            // Draw Subject (center wrapped)
-            ctx.font = 'bold '+(28*scale)+'px system-ui, -apple-system, sans-serif';
-            const lines = wrapText(ctx, cls.subject, rw - 24*scale);
-            const lh = 34*scale;
+
+            const sy = gridTop + dayHdrH + (sH - minHour) * hourH;
+            const ch = (eH - sH) * hourH;
+
+            const isLab = cls.subject.toLowerCase().includes('lab') || (eH - sH >= 2.5);
+            let col = labPalette;
+            if (!isLab) {
+                let hash = 0;
+                for (let i = 0; i < cls.subject.length; i++) hash = cls.subject.charCodeAt(i) + ((hash << 5) - hash);
+                col = palettes[Math.abs(hash) % palettes.length];
+            }
+
+            const cardPad = 4 * scale;
+            const rx = colX + cardPad;
+            const ry = sy + 2 * scale;
+            const rw = dayColW - cardPad * 2;
+            const rh = ch - 4 * scale;
+
+            // Card Body
+            ctx.fillStyle = col.bg;
+            ctx.beginPath();
+            ctx.roundRect(rx, ry, rw, rh, 10 * scale);
+            ctx.fill();
+            ctx.strokeStyle = col.border;
+            ctx.lineWidth = 1.5 * scale;
+            ctx.stroke();
+
+            // Inside Card: Top Time Pill
+            const timePillHeight = 22 * scale;
+            const timePillWidth = rw - 12 * scale;
+            const timePillPosX = rx + 6 * scale;
+            const timePillPosY = ry + 6 * scale;
+
+            ctx.fillStyle = col.pillBg;
+            ctx.beginPath();
+            ctx.roundRect(timePillPosX, timePillPosY, timePillWidth, timePillHeight, 6 * scale);
+            ctx.fill();
+
+            ctx.fillStyle = col.pillText;
+            ctx.font = 'bold ' + (11 * scale) + 'px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(format12(cls.start_time) + ' - ' + format12(cls.end_time), rx + rw / 2, timePillPosY + timePillHeight / 2);
+
+            // Inside Card: Subject Title
+            ctx.fillStyle = col.title;
+            ctx.font = 'bold ' + (15 * scale) + 'px system-ui, sans-serif';
+            const lines = wrapText(ctx, cls.subject, rw - 14 * scale);
+            const lh = 18 * scale;
             const textBlockH = lines.length * lh;
-            let startY = ry + ch/2 - textBlockH/2;
+            const availCenter = (rh - timePillHeight - (24 * scale));
+            let titleStartY = ry + timePillHeight + (availCenter - textBlockH) / 2 + 10 * scale;
+
             lines.forEach(line => {
-                ctx.fillText(line, rx+rw/2, startY);
-                startY += lh;
+                ctx.fillText(line, rx + rw / 2, titleStartY);
+                titleStartY += lh;
             });
-            
-            // Draw Room (bottom)
-            ctx.font = '500 '+(20*scale)+'px system-ui, -apple-system, sans-serif';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(cls.location||'', rx+rw/2, ry+ch-16*scale);
+
+            // Inside Card: Room Location
+            ctx.fillStyle = col.room;
+            ctx.font = '600 ' + (13 * scale) + 'px system-ui, sans-serif';
+            ctx.fillText(cls.location || '', rx + rw / 2, ry + rh - 12 * scale);
         });
     });
 
-    canvas.toBlob((blob) => {
+    // 6. EXPORT / SHARE HANDLER (Native Share on Mobile + Direct Download Fallback)
+    canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const cleanName = nameStr.replace(/[^a-zA-Z0-9]/g, '_');
+        const fileName = 'FAST_Timetable_' + cleanName + '.png';
+        const file = new File([blob], fileName, { type: 'image/png' });
+
+        // If Web Share API is available (Mobile devices: iOS Safari, Android Chrome)
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+                await navigator.share({
+                    files: [file],
+                    title: 'FAST NUCES Timetable',
+                    text: `${nameStr} Timetable Graphic`
+                });
+                showToast('Shared successfully!', 'info');
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return; // User simply closed the share sheet
+            }
+        }
+
+        // Fallback: Standard browser download (Desktop)
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const name = nameStr.replace(/[^a-zA-Z0-9]/g,'_');
-        a.download = 'FAST_Timetable_'+name+'.png';
+        a.download = fileName;
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
         showToast('Timetable exported!', 'info');
     }, 'image/png', 1.0);
