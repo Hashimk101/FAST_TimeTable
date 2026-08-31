@@ -51,12 +51,7 @@ def _parse_batch_name(raw_name: str) -> str:
     if raw_name.startswith('BS'):
         disc = raw_name.replace('BS', '').replace(f'(20{year_match.group(1)})' if year_match else '', '').strip()
         return f"BS{year_str} {disc}".strip()
-    elif raw_name.startswith('MS'):
-        if "Electives" in raw_name:
-            return raw_name
-        disc = raw_name.replace('MS', '').replace('(', '').replace(')', '').strip()
-        return f"MS{year_str} {disc}".strip()
-    return raw_name
+    return ""
 
 def _extract_legend(row_data: list) -> dict:
     legend_color_map = {}
@@ -68,6 +63,8 @@ def _extract_legend(row_data: list) -> dict:
                 continue
             if re.match(r'^\d{2}:\d{2}', val):
                 continue
+            if val.startswith('MS') or val.startswith('PhD') or "Elective" in val:
+                continue
             
             fmt = cell.get('effectiveFormat', {})
             bg = fmt.get('backgroundColor', {})
@@ -77,7 +74,8 @@ def _extract_legend(row_data: list) -> dict:
                 continue
                 
             clean_val = _parse_batch_name(val)
-            legend_color_map[rgb] = clean_val
+            if clean_val and clean_val.startswith('BS'):
+                legend_color_map[rgb] = clean_val
     return legend_color_map
 
 def _grid_to_dataframe(row_data: list) -> DataFrame:

@@ -262,15 +262,13 @@ async function initBatches() {
             // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
             const seenPrefixes = new Set();
             batches.forEach(b => {
-                if ((b.name.includes('BS') || b.name.includes('MS')) && !b.name.includes('Elective') && !b.name.includes('Repeat')) {
-                    // Strip the last word (discipline) to get prefix like "BS 25" or "MS"
+                if (b.name.startsWith('BS') && !b.name.includes('Repeat') && !b.name.includes('Elective')) {
+                    // Strip the last word (discipline) to get prefix like "BS 25"
                     const parts = b.name.split(' ');
                     let prefix;
                     if (parts.length >= 3 && /^\d{2}$/.test(parts[1])) {
-                        // "BS 25 CS" -> "BS 25"
                         prefix = parts.slice(0, 2).join(' ');
                     } else {
-                        // "MS CS" -> "MS"
                         prefix = parts[0];
                     }
 
@@ -302,16 +300,6 @@ async function loadStep2Data(batchName, courseName) {
         const allSubjectsMap = await fetchDecoded('/data/subjects.bin') || {};
         const regSubjects = allSubjectsMap[exactBatch] || allSubjectsMap[batchName] || allSubjectsMap['ALL'] || [];
         renderSubjects(regSubjects, 'subject-list', true);
-        
-        // 2. Electives (Only show for MS batches)
-        const electivesSection = document.getElementById('electives-section');
-        if (batchName.startsWith('MS')) {
-            if (electivesSection) electivesSection.style.display = 'block';
-            const electives = await fetchDecoded('/data/electives.bin') || [];
-            renderSubjects(electives, 'electives-list', false);
-        } else {
-            if (electivesSection) electivesSection.style.display = 'none';
-        }
 
         // 3. Repeater Data
         if (isRepeater) {
@@ -631,12 +619,10 @@ form.addEventListener('submit', async (e) => {
         return;
     }
 
-    // Step 1 Validation: Non-MS batches MUST have Discipline and Section
-    if (!batch.startsWith("MS")) {
-        if (!course || !section) {
-            showToast("Please select both a Discipline and a Section for regular batches.");
-            return;
-        }
+    // Step 1 Validation: Must have Discipline and Section
+    if (!course || !section) {
+        showToast("Please select both a Discipline and a Section.");
+        return;
     }
 
     const btn = document.getElementById('generate-btn');

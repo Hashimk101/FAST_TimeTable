@@ -58,12 +58,7 @@ def parse_batch_name(raw_name: str) -> str:
     if raw_name.startswith('BS'):
         disc = raw_name.replace('BS', '').replace(f'(20{year_match.group(1)})' if year_match else '', '').strip()
         return f"BS{year_str} {disc}".strip()
-    elif raw_name.startswith('MS'):
-        if "Electives" in raw_name:
-            return raw_name
-        disc = raw_name.replace('MS', '').replace('(', '').replace(')', '').strip()
-        return f"MS{year_str} {disc}".strip()
-    return raw_name
+    return ""
 
 def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
     """
@@ -102,6 +97,9 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 if re.match(r'^\d{2}:\d{2}', val):
                     continue
 
+                if val.startswith('MS') or val.startswith('PhD') or "Elective" in val:
+                    continue
+
                 effective_format = cell.get('effectiveFormat', {})
                 bg_color_dict = effective_format.get('backgroundColor', {})
                 rgb = normalize_color(bg_color_dict)
@@ -114,6 +112,8 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 
                 # Parse out discipline from batch string
                 clean_val = parse_batch_name(val)
+                if not clean_val or not clean_val.startswith('BS'):
+                    continue
                 
                 # Check if batch is already in list
                 if not any(b['name'] == clean_val for b in legend_batches):
@@ -189,7 +189,7 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 # Find matching batch by color
                 matched_batch = None
                 for legend_b in legend_batches:
-                    if is_color_similar(cell_rgb, legend_b['rgb'], tolerance=25):
+                    if is_color_similar(cell_rgb, legend_b['rgb'], tolerance=12):
                         matched_batch = legend_b['name']
                         break
 

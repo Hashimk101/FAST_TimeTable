@@ -358,6 +358,8 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
 
             # Now it is safe to split
             start_time, end_time = separate_time_slot(entry['time_slot'])
+            if not start_time or not end_time or start_time == end_time:
+                continue
             entry['start_time'] = start_time
             entry['end_time'] = end_time
 

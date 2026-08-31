@@ -39,10 +39,10 @@ def generate_static_data():
 
     print("Generating static binary data files...")
 
-    # 1. Batches
+    # 1. Batches (Only BS batches)
     with sqlite3.connect(SUBJECTS_DB) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, color_hex FROM batches ORDER BY id ASC")
+        cursor.execute("SELECT id, name, color_hex FROM batches WHERE name LIKE 'BS%' ORDER BY id ASC")
         batches_rows = cursor.fetchall()
         batches = [{"id": r[0], "name": r[1], "color_hex": r[2]} for r in batches_rows]
         
@@ -55,12 +55,13 @@ def generate_static_data():
         all_subjects_rows = cursor.fetchall()
         all_subjects = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in all_subjects_rows]
 
-        # Map batch_id to subjects
+        # Map batch_id to subjects (Only BS batches)
         cursor.execute("""
             SELECT b.name, s.id, s.name, s.short_name
             FROM batch_subjects bs
             JOIN batches b ON bs.batch_id = b.id
             JOIN subjects s ON bs.subject_id = s.id
+            WHERE b.name LIKE 'BS%'
             ORDER BY s.name ASC
         """)
         batch_subs_rows = cursor.fetchall()
@@ -77,19 +78,10 @@ def generate_static_data():
             f.write(encode_data(subjects_by_batch))
         print(f"Generated subjects.bin")
 
-        # 3. Elective subjects
-        cursor.execute("""
-            SELECT DISTINCT s.id, s.name, s.short_name
-            FROM subjects s
-            JOIN batch_subjects bs ON s.id = bs.subject_id
-            JOIN batches b ON bs.batch_id = b.id
-            WHERE b.name LIKE '%Elective%'
-            ORDER BY s.name ASC
-        """)
-        electives = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in cursor.fetchall()]
+        # 3. Electives (Empty now that MS is dropped)
         with open(os.path.join(OUTPUT_DIR, 'electives.bin'), 'w') as f:
-            f.write(encode_data(electives))
-        print(f"Generated electives.bin ({len(electives)} electives)")
+            f.write(encode_data([]))
+        print(f"Generated electives.bin (0 electives)")
 
         # 4. Repeat subjects with sections
         # Source of truth: Actual schedules in uni_timetable.db and uni_timetable_lab.db
@@ -176,12 +168,10 @@ def generate_static_data():
             continue
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH IS NOT NULL")
+            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH LIKE 'BS%'")
             for row in cursor.fetchall():
                 b, s = row[0], row[1]
-                if b and b.startswith('MS'):
-                    combos.add((b, ''))
-                elif b:
+                if b:
                     combos.add((b, s or ''))
 
     print(f"Processing {len(combos)} batch/section combinations for schedules...")
@@ -199,18 +189,18 @@ def generate_static_data():
                     continue
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
-                    if str(batch_val).startswith('MS'):
+                    if batch_val and section_val:
                         cursor.execute(f"""
                             SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
                             FROM timetable
-                            WHERE DAY = ? AND BATCH = ?
-                        """, (day, batch_val))
+                            WHERE DAY = ? AND (SECTION = ? OR SECTION = '' OR SECTION IS NULL) AND BATCH = ?
+                        """, (day, section_val, batch_val))
                     elif batch_val:
                         cursor.execute(f"""
                             SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
                             FROM timetable
-                            WHERE DAY = ? AND SECTION = ? AND BATCH = ?
-                        """, (day, section_val, batch_val))
+                            WHERE DAY = ? AND (SECTION = '' OR SECTION IS NULL) AND BATCH = ?
+                        """, (day, batch_val))
                     else:
                         cursor.execute(f"""
                             SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
@@ -219,6 +209,8 @@ def generate_static_data():
                         """, (day, section_val))
 
                     for row in cursor.fetchall():
+                        if not row[0] or not row[1] or row[0] == row[1]:
+                            continue
                         day_entries.append({
                             "start_time": row[0],
                             "end_time": row[1],
@@ -272,32 +264,65 @@ def generate_static_data():
     print(f"Successfully generated {count} schedule binary files in {schedules_dir}!")
 
     
-    # NEW: Generate Free Rooms Occupancy Map
+    # NEW: Generate Free Rooms Occupancy Map (Including Classroom & Lab Occupancy)
     print("Generating rooms.bin for Find Free Rooms...")
     rooms_data = {
         "rooms": [],
         "occupied": { d: {} for d in DAYS_OF_WEEK }
     }
     
+    # 1. Collect Block C & D rooms from theory classrooms
     with sqlite3.connect(COURSE_DB) as conn:
         cur = conn.cursor()
-        # Only fetch Block C and Block D classrooms
-        cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%' ORDER BY CLASSROOM")
-        valid_rooms = [r[0] for r in cur.fetchall()]
-        rooms_data["rooms"] = valid_rooms
-        
-        for r in valid_rooms:
-            for d in DAYS_OF_WEEK:
-                rooms_data["occupied"][d][r] = []
-                
-        cur.execute("SELECT DAY, CLASSROOM, START_TIME, END_TIME FROM timetable WHERE CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%'")
+        cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND CLASSROOM IS NOT NULL")
+        for r in cur.fetchall():
+            room_code = r[0].strip()
+            if room_code and room_code not in rooms_data["rooms"]:
+                rooms_data["rooms"].append(room_code)
+
+    # 2. Collect Block C & D rooms from lab locations (e.g. "Rawal 3-GPU (C-511)" -> "C-511")
+    if os.path.exists(LAB_DB):
+        with sqlite3.connect(LAB_DB) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT LAB FROM timetable WHERE LAB IS NOT NULL")
+            for r in cur.fetchall():
+                lab_str = r[0].strip()
+                match = re.search(r'\b([CD]-\d{3})\b', lab_str, re.IGNORECASE)
+                if match:
+                    room_code = match.group(1).upper()
+                    if room_code not in rooms_data["rooms"]:
+                        rooms_data["rooms"].append(room_code)
+
+    rooms_data["rooms"].sort()
+    for r in rooms_data["rooms"]:
+        for d in DAYS_OF_WEEK:
+            rooms_data["occupied"][d][r] = []
+            
+    # 3. Populate theory occupancy
+    with sqlite3.connect(COURSE_DB) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DAY, CLASSROOM, START_TIME, END_TIME FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND START_TIME IS NOT NULL AND END_TIME IS NOT NULL AND START_TIME != '' AND END_TIME != ''")
         for day, room, start, end in cur.fetchall():
-            if day in rooms_data["occupied"] and room in rooms_data["occupied"][day]:
-                rooms_data["occupied"][day][room].append({"s": start, "e": end})
-                
+            room_code = (room or '').strip()
+            if day in rooms_data["occupied"] and room_code in rooms_data["occupied"][day]:
+                rooms_data["occupied"][day][room_code].append({"s": start, "e": end})
+
+    # 4. Populate lab occupancy
+    if os.path.exists(LAB_DB):
+        with sqlite3.connect(LAB_DB) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DAY, LAB, START_TIME, END_TIME FROM timetable WHERE LAB IS NOT NULL AND START_TIME IS NOT NULL AND END_TIME IS NOT NULL AND START_TIME != '' AND END_TIME != ''")
+            for day, lab, start, end in cur.fetchall():
+                lab_str = (lab or '').strip()
+                match = re.search(r'\b([CD]-\d{3})\b', lab_str, re.IGNORECASE)
+                if match:
+                    room_code = match.group(1).upper()
+                    if day in rooms_data["occupied"] and room_code in rooms_data["occupied"][day]:
+                        rooms_data["occupied"][day][room_code].append({"s": start, "e": end})
+            
     with open(os.path.join(OUTPUT_DIR, 'rooms.bin'), 'w') as f:
         f.write(encode_data(rooms_data))
-    print(f"Generated rooms.bin ({len(valid_rooms)} rooms tracked)")
+    print(f"Generated rooms.bin ({len(rooms_data['rooms'])} rooms tracked)")
 
     # 6. Generate Version Manifest
     version_info = {
