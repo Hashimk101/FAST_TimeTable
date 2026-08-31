@@ -120,11 +120,11 @@ def get_batches():
             batches = []
             for row in rows:
                 name = row[1]
+                if not name.startswith("BS") or "Repeat" in name or "Elective" in name:
+                    continue
                 parts = name.split()
-                if name.startswith("BS") and len(parts) >= 2:
+                if len(parts) >= 2:
                     base_name = f"BS {parts[1]}"
-                elif name.startswith("MS"):
-                    base_name = "MS"
                 else:
                     base_name = name
                 

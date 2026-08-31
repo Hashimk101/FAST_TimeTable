@@ -89,21 +89,46 @@ def rebuild_subjects_db():
         corrected_batch_subject_links.add((batch_name, subject_name))
     # ---------------------------
 
-    # Insert Batches in legend order
+    # Insert Batches (Only BS batches)
     batch_name_to_id = {}
     for batch in legend_batches:
-        cursor.execute("INSERT INTO batches (name, color_hex) VALUES (?, ?)", (batch['name'], batch['hex']))
-        batch_name_to_id[batch['name']] = cursor.lastrowid
+        b_name = batch['name']
+        if not b_name.startswith('BS'):
+            continue
+        cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, batch['hex']))
+        cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
+        batch_name_to_id[b_name] = cursor.fetchone()[0]
+
+    # Authoritative Batch-Subject mappings directly from timetable databases
+    for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
+        if os.path.exists(db_file):
+            try:
+                with sqlite3.connect(db_file) as c_conn:
+                    c_cursor = c_conn.cursor()
+                    c_cursor.execute("SELECT DISTINCT BATCH, SUBJECT FROM timetable WHERE BATCH LIKE 'BS%' AND SUBJECT IS NOT NULL AND SUBJECT != ''")
+                    for b_name, s_name in c_cursor.fetchall():
+                        b_name = (b_name or '').strip()
+                        s_name = (s_name or '').strip()
+                        if b_name and s_name:
+                            corrected_batch_subject_links.add((b_name, s_name))
+                            if s_name not in corrected_unique_subjects:
+                                from sheets_subject_extractor import generate_short_name
+                                corrected_unique_subjects[s_name] = generate_short_name(s_name)
+            except Exception as e:
+                print(f"Warning: Could not read batch-subject mappings from {db_file}: {e}")
 
     # Insert Subjects
     subject_name_to_id = {}
     for name, short in corrected_unique_subjects.items():
-        cursor.execute("INSERT INTO subjects (name, short_name) VALUES (?, ?)", (name, short))
-        subject_name_to_id[name] = cursor.lastrowid
+        cursor.execute("INSERT OR IGNORE INTO subjects (name, short_name) VALUES (?, ?)", (name, short))
+        cursor.execute("SELECT id FROM subjects WHERE name = ?", (name,))
+        subject_name_to_id[name] = cursor.fetchone()[0]
 
-    # Insert Batch-Subject Links
+    # Insert Batch-Subject Links (Strictly BS batches)
     inserted_links = 0
     for batch_name, subject_name in corrected_batch_subject_links:
+        if not batch_name.startswith('BS'):
+            continue
         batch_id = batch_name_to_id.get(batch_name)
         subject_id = subject_name_to_id.get(subject_name)
 
