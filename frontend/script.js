@@ -196,11 +196,13 @@ const closeBtn = document.getElementById('close-config-btn');
 function openModal() {
     initBatches();
     modal.classList.add('active');
-    // Focus trap: move focus into modal
-    const firstInput = modal.querySelector('select, input, button');
-    if (firstInput) {
-        // Prevent scroll avoids breaking the slide-up animation
-        firstInput.focus({ preventScroll: true });
+    // Only focus on desktop/fine-pointer devices to prevent mobile select picker stutter
+    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+    if (!isTouch) {
+        const firstInput = modal.querySelector('select, input, button');
+        if (firstInput) {
+            firstInput.focus({ preventScroll: true });
+        }
     }
 }
 
@@ -371,11 +373,29 @@ function parseTimeMinutes(timeStr) {
     }
 }
 
+let cachedBatchesData = null;
+let isBatchesLoading = false;
+
 async function initBatches() {
+    const select = document.getElementById('batch-input');
+    if (!select) return;
+
+    // Fast-path: If already populated, restore saved value if needed and return immediately (0ms)
+    if (select.options.length > 1) {
+        if (localStorage.getItem('batch') && !select.value) {
+            select.value = localStorage.getItem('batch');
+        }
+        return;
+    }
+
+    if (isBatchesLoading) return;
+    isBatchesLoading = true;
+
     try {
-        let batches = await fetchDecoded('data/batches.bin');
-        if (!batches) batches = await fetchDecoded('/data/batches.bin');
-        const select = document.getElementById('batch-input');
+        if (!cachedBatchesData) {
+            cachedBatchesData = await fetchDecoded('data/batches.bin') || await fetchDecoded('/data/batches.bin');
+        }
+        const batches = cachedBatchesData;
         
         select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
 
@@ -383,7 +403,7 @@ async function initBatches() {
             // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
             const seenPrefixes = new Set();
             batches.forEach(b => {
-                if (b.name.startsWith('BS') && !b.name.includes('Repeat') && !b.name.includes('Elective')) {
+                if (b.name && b.name.startsWith('BS') && !b.name.includes('Repeat') && !b.name.includes('Elective')) {
                     // Strip the last word (discipline) to get prefix like "BS 25"
                     const parts = b.name.split(' ');
                     let prefix;
@@ -408,6 +428,8 @@ async function initBatches() {
         }
     } catch (e) {
         console.error("Failed to load batches", e);
+    } finally {
+        isBatchesLoading = false;
     }
 }
 

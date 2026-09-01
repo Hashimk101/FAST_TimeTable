@@ -1074,6 +1074,7 @@ kbd {
     transform: translateY(100%);
     display: flex;
     flex-direction: column;
+    will-change: transform;
   }
   
   .drag-handle {
