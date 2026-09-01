@@ -1466,6 +1466,12 @@ setInterval(() => {
         openRoomsModal();
     });
 
+    // Nav item: Announcement Mode
+    document.getElementById('nav-item-announcements')?.addEventListener('click', () => {
+        closeDrawer();
+        openAnnouncementsModal();
+    });
+
     // Nav item: Configure
     document.getElementById('nav-item-config')?.addEventListener('click', () => {
         closeDrawer();
@@ -1556,12 +1562,208 @@ setInterval(() => {
             : freeRooms.map(r => '<div class="room-chip">' + r + '</div>').join('');
     });
 
+    // --- Announcement Mode Modal ---
+    const annModal = document.getElementById('announcements-modal');
+    const closeAnnModalBtn = document.getElementById('close-announcements-modal-btn');
+    const annBlockBtns = document.querySelectorAll('#ann-block-grid [data-ann-block]');
+    const annFloorGrid = document.getElementById('ann-floor-grid');
+    const annDayBtns = document.querySelectorAll('#ann-day-grid [data-ann-day]');
+    const annTimeSlotSelect = document.getElementById('ann-time-slot-select');
+    const annSearchInput = document.getElementById('ann-search-input');
+    const annCountBadge = document.getElementById('ann-count-badge');
+    const annContextLabel = document.getElementById('ann-context-label');
+    const annCardsList = document.getElementById('ann-cards-list');
+
+    let annData = null;
+    let selectedAnnBlock = 'C';
+    let selectedAnnFloor = 4;
+    let selectedAnnDay = 'Monday';
+
+    const floorLabels = {
+        'C': { 2: '2nd (Labs)', 3: '3rd', 4: '4th', 5: '5th (Labs)', 6: '6th' },
+        'D': { 2: '2nd (Labs)', 3: '3rd', 4: '4th', 5: '5th' },
+        'A': { 2: '2nd (Labs)', 3: '3rd (Labs)' },
+        'B': { 1: '1st (Labs)' }
+    };
+
+    async function openAnnouncementsModal() {
+        initAnnDefaults();
+        annModal?.classList.add('active');
+        if (!annData) {
+            if (annCardsList) annCardsList.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-tertiary);font-size:0.85rem">Loading schedule data...</div>';
+            annData = await fetchDecoded('data/announcements.bin');
+            if (!annData) annData = await fetchDecoded('/data/announcements.bin');
+        }
+        renderAnnFloors();
+        renderAnnouncements();
+    }
+
+    function closeAnnModal() {
+        annModal?.classList.remove('active');
+    }
+
+    closeAnnModalBtn?.addEventListener('click', closeAnnModal);
+    annModal?.addEventListener('click', (e) => { if (e.target === annModal) closeAnnModal(); });
+
+    function initAnnDefaults() {
+        const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const today = dayNames[new Date().getDay()];
+        selectedAnnDay = (today === 'Sunday') ? 'Monday' : today;
+        annDayBtns.forEach(b => {
+            const active = b.dataset.annDay === selectedAnnDay;
+            b.classList.toggle('active', active);
+            b.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+        setLiveTimeSlot();
+    }
+
+    function setLiveTimeSlot() {
+        const now = new Date();
+        const mins = now.getHours() * 60 + now.getMinutes();
+        const slots = [
+            { v: '08:30 - 09:50', e: 590 },
+            { v: '10:00 - 11:20', e: 680 },
+            { v: '11:30 - 12:50', e: 770 },
+            { v: '01:00 - 02:20', e: 860 },
+            { v: '02:30 - 03:50', e: 950 },
+            { v: '03:55 - 05:15', e: 1035 }
+        ];
+        const match = slots.find(s => mins <= s.e);
+        if (match && annTimeSlotSelect) annTimeSlotSelect.value = match.v;
+        else if (annTimeSlotSelect) annTimeSlotSelect.value = '08:30 - 09:50';
+    }
+
+    annBlockBtns.forEach(btn => btn.addEventListener('click', () => {
+        annBlockBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
+        btn.classList.add('active');
+        btn.setAttribute('aria-checked', 'true');
+        selectedAnnBlock = btn.dataset.annBlock;
+        renderAnnFloors();
+        renderAnnouncements();
+    }));
+
+    annDayBtns.forEach(btn => btn.addEventListener('click', () => {
+        annDayBtns.forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
+        btn.classList.add('active');
+        btn.setAttribute('aria-checked', 'true');
+        selectedAnnDay = btn.dataset.annDay;
+        renderAnnouncements();
+    }));
+
+    annTimeSlotSelect?.addEventListener('change', renderAnnouncements);
+    annSearchInput?.addEventListener('input', renderAnnouncements);
+
+    function renderAnnFloors() {
+        if (!annFloorGrid) return;
+        const availableFloors = (annData?.blocks && annData.blocks[selectedAnnBlock]) 
+            ? annData.blocks[selectedAnnBlock]
+            : (selectedAnnBlock === 'C' ? [2,3,4,5,6] : selectedAnnBlock === 'D' ? [2,3,4,5] : selectedAnnBlock === 'A' ? [2,3] : [1]);
+        
+        if (!availableFloors.includes(Number(selectedAnnFloor))) {
+            selectedAnnFloor = availableFloors[0];
+        }
+
+        annFloorGrid.style.gridTemplateColumns = `repeat(${availableFloors.length}, 1fr)`;
+        annFloorGrid.innerHTML = availableFloors.map(fl => {
+            const label = (floorLabels[selectedAnnBlock] && floorLabels[selectedAnnBlock][fl]) || `${fl}th`;
+            const isActive = Number(selectedAnnFloor) === fl;
+            return `<button type="button" class="segment-btn ${isActive ? 'active' : ''}" data-ann-floor="${fl}" role="radio" aria-checked="${isActive ? 'true' : 'false'}">${label}</button>`;
+        }).join('');
+
+        annFloorGrid.querySelectorAll('[data-ann-floor]').forEach(b => {
+            b.addEventListener('click', () => {
+                annFloorGrid.querySelectorAll('[data-ann-floor]').forEach(btn => {
+                    btn.classList.remove('active');
+                    btn.setAttribute('aria-checked', 'false');
+                });
+                b.classList.add('active');
+                b.setAttribute('aria-checked', 'true');
+                selectedAnnFloor = Number(b.dataset.annFloor);
+                renderAnnouncements();
+            });
+        });
+    }
+
+    function renderAnnouncements() {
+        if (!annData || !annCardsList) return;
+
+        const slot = annTimeSlotSelect?.value || '08:30 - 09:50';
+        const [sStr, eStr] = slot.split(' - ');
+        const slotStart = parseTime(sStr);
+        const slotEnd = parseTime(eStr);
+        const searchQ = (annSearchInput?.value || '').trim().toLowerCase();
+
+        const daySchedule = (annData.schedule && annData.schedule[selectedAnnDay]) || [];
+
+        // Filter for active classes on this block & floor overlapping the time slot
+        const active = daySchedule.filter(c => {
+            if (c.b !== selectedAnnBlock) return false;
+            if (Number(c.f) !== Number(selectedAnnFloor)) return false;
+            const cs = parseTime(c.s);
+            const ce = parseTime(c.e);
+            const overlaps = Math.max(slotStart, cs) < Math.min(slotEnd, ce);
+            if (!overlaps) return false;
+
+            if (searchQ) {
+                const combined = `${c.bt} ${c.disc} ${c.sec} ${c.sub} ${c.r} ${c.n}`.toLowerCase();
+                if (!combined.includes(searchQ)) return false;
+            }
+            return true;
+        });
+
+        // Natural sort by room number
+        active.sort((a, b) => (a.r || '').localeCompare(b.r || '', undefined, { numeric: true }));
+
+        // Deduplicate any exact identical classes sharing row
+        const seen = new Set();
+        const uniqueActive = [];
+        for (const item of active) {
+            const key = `${item.r}_${item.s}_${item.bt}_${item.sec}_${item.sub}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueActive.push(item);
+            }
+        }
+
+        annCountBadge.textContent = `${uniqueActive.length} Active`;
+        annContextLabel.textContent = `Block ${selectedAnnBlock} · Floor ${selectedAnnFloor} · ${selectedAnnDay.slice(0,3)} · ${slot}`;
+
+        if (uniqueActive.length === 0) {
+            annCardsList.innerHTML = `<div class="ann-empty-msg">No active classes found on Block ${selectedAnnBlock} - Floor ${selectedAnnFloor} for this time slot.</div>`;
+            return;
+        }
+
+        annCardsList.innerHTML = uniqueActive.map(c => {
+            const isLab = Boolean(c.lab);
+            const timeRange = `${formatTime12h(c.s)} – ${formatTime12h(c.e)}`;
+            const secBadge = c.sec ? (c.sec.includes(c.disc) ? c.sec : `${c.disc}-${c.sec}`) : c.disc;
+            const roomTitle = (isLab && c.n) ? c.n : c.r;
+
+            return `
+            <div class="ann-card">
+              <div class="ann-card-hdr">
+                <div class="ann-room-tag">
+                  <span>${c.r}</span>
+                  ${isLab ? '<span class="ann-lab-pill">Lab</span>' : ''}
+                </div>
+                <span class="ann-time-tag">${timeRange}</span>
+              </div>
+              <div class="ann-target-row">
+                <span class="ann-batch-tag">${c.bt || ''}</span>
+                ${secBadge ? `<span class="ann-sec-badge">${secBadge}</span>` : ''}
+              </div>
+              <div class="ann-sub-name">${isLab && c.n && c.n !== c.r ? `<strong>${c.n}</strong> · ` : ''}${c.sub || ''}</div>
+            </div>`;
+        }).join('');
+    }
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
         if (e.key === 'Escape') {
             if (drawerOverlay?.classList.contains('active')) { closeDrawer(); return; }
             if (roomsModal?.classList.contains('active')) { closeRoomsModal(); return; }
+            if (annModal?.classList.contains('active')) { closeAnnModal(); return; }
         }
         if (e.key === 'm' || e.key === 'M') {
             drawerOverlay?.classList.contains('active') ? closeDrawer() : openDrawer();
