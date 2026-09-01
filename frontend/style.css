@@ -1994,3 +1994,19 @@ kbd {
 .ann-sec-badge{font-size:0.75rem;font-weight:600;padding:2px 6px;border-radius:var(--r-sm);background:var(--surface-hover);color:var(--accent);border:1px solid var(--border-color)}
 .ann-sub-name{font-size:0.82rem;font-weight:500;color:var(--text-secondary)}
 .ann-empty-msg{text-align:center;padding:32px 16px;color:var(--text-tertiary);font-size:0.85rem}
+
+/* === Faculty Directory Extras === */
+.faculty-modal-content{max-width:540px}
+.faculty-dept-scroll::-webkit-scrollbar{display:none}
+.faculty-dept-scroll{-ms-overflow-style:none;scrollbar-width:none}
+.faculty-cards-list{display:flex;flex-direction:column;gap:8px;max-height:380px;overflow-y:auto;padding:2px}
+.faculty-card{background:var(--bg-color);border:1px solid var(--border-color);border-radius:var(--r-md);padding:12px 14px;transition:border-color 0.15s ease,transform 0.1s ease}
+.faculty-card:hover{border-color:var(--text-tertiary);transform:translateY(-1px)}
+.faculty-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px}
+.faculty-name{font-size:0.94rem;font-weight:700;color:var(--text-primary);letter-spacing:-0.01em}
+.faculty-office-pill{font-size:0.78rem;font-weight:700;color:var(--text-primary);background:var(--surface-color);border:1px solid var(--border-color);padding:3px 8px;border-radius:var(--r-sm);white-space:nowrap}
+.faculty-meta-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.faculty-desig{font-size:0.8rem;font-weight:500;color:var(--text-secondary)}
+.faculty-dept-pill{font-size:0.7rem;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--surface-hover);color:var(--accent);border:1px solid var(--border-color)}
+.faculty-email-link{font-size:0.8rem;color:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:4px;word-break:break-all}
+.faculty-email-link:hover{text-decoration:underline}
