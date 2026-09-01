@@ -32,6 +32,51 @@ def parse_time(time_str):
     except Exception:
         return 0
 
+def parse_discipline(batch_str, section_str):
+    disc = ""
+    clean_sec = section_str or ""
+    if clean_sec:
+        m_sec = re.match(r'^([A-Z]+)-([A-Za-z0-9]+)$', clean_sec)
+        if m_sec:
+            disc = m_sec.group(1)
+            clean_sec = m_sec.group(2)
+    if not disc and batch_str:
+        m_batch = re.search(r'\b(CS|SE|AI|DS|CY)\b', batch_str)
+        if m_batch:
+            disc = m_batch.group(1)
+    return disc, clean_sec
+
+def parse_room_location(room_str, is_lab=False):
+    r = (room_str or '').strip()
+    m = re.search(r'\b([A-D])-(\d)(\d{2})\b', r, re.IGNORECASE)
+    if m:
+        block = m.group(1).upper()
+        floor = int(m.group(2))
+        if block == 'C' and floor == 1:
+            return None, None, None, None
+        room_code = f"{block}-{m.group(2)}{m.group(3)}"
+        display_name = r if is_lab else room_code
+        return block, floor, room_code, display_name
+    if 'B-Digital' in r:
+        return 'B', 1, 'B-Digital', 'Digital Logic Lab (B-Digital)'
+    if 'B-Computing' in r:
+        return 'B', 1, 'B-Computing-3', 'Computing Lab 3 (Block B)'
+    if 'Kybher-3' in r:
+        return 'A', 3, 'A-Khyber-3', 'Khyber Lab 3 (Block A)'
+    if 'Kybher-4' in r:
+        return 'A', 3, 'A-Khyber-4', 'Khyber Lab 4 (Block A)'
+    if 'Margala 4 (C-212' in r:
+        return 'C', 2, 'C-212', 'Margalla 4 (C-212)'
+    if r.startswith('C-'):
+        m_fl = re.search(r'C-(\d)', r)
+        fl = int(m_fl.group(1)) if m_fl else 1
+        return 'C', fl, r, r
+    if r.startswith('D-'):
+        m_fl = re.search(r'D-(\d)', r)
+        fl = int(m_fl.group(1)) if m_fl else 1
+        return 'D', fl, r, r
+    return None, None, None, None
+
 def generate_static_data():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     schedules_dir = os.path.join(OUTPUT_DIR, 'schedules')
@@ -324,7 +369,60 @@ def generate_static_data():
         f.write(encode_data(rooms_data))
     print(f"Generated rooms.bin ({len(rooms_data['rooms'])} rooms tracked)")
 
-    # 6. Generate Version Manifest
+    # 6. Generate Announcements Data (By Block, Floor, Day, Room/Lab)
+    print("Generating announcements.bin for Announcement Mode...")
+    blocks_floors = {}
+    ann_schedule = { d: [] for d in DAYS_OF_WEEK }
+
+    with sqlite3.connect(COURSE_DB) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT DAY, START_TIME, END_TIME, SUBJECT, CLASSROOM, SECTION, BATCH FROM timetable WHERE CLASSROOM IS NOT NULL AND CLASSROOM != ''")
+        for day, start, end, subject, classroom, section, batch in cur.fetchall():
+            if day not in ann_schedule or not start or not end:
+                continue
+            block, floor, room_code, display_name = parse_room_location(classroom, is_lab=False)
+            if not block:
+                continue
+            disc, clean_sec = parse_discipline(batch, section)
+            if block not in blocks_floors:
+                blocks_floors[block] = set()
+            blocks_floors[block].add(floor)
+            ann_schedule[day].append({
+                "b": block, "f": floor, "r": room_code, "n": display_name, "lab": 0,
+                "s": start, "e": end, "sub": subject or "",
+                "bt": batch or "", "disc": disc or "", "sec": clean_sec or section or ""
+            })
+
+    if os.path.exists(LAB_DB):
+        with sqlite3.connect(LAB_DB) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DAY, START_TIME, END_TIME, SUBJECT, LAB, SECTION, BATCH FROM timetable WHERE LAB IS NOT NULL AND LAB != ''")
+            for day, start, end, subject, lab, section, batch in cur.fetchall():
+                if day not in ann_schedule or not start or not end:
+                    continue
+                block, floor, room_code, display_name = parse_room_location(lab, is_lab=True)
+                if not block:
+                    continue
+                disc, clean_sec = parse_discipline(batch, section)
+                if block not in blocks_floors:
+                    blocks_floors[block] = set()
+                blocks_floors[block].add(floor)
+                ann_schedule[day].append({
+                    "b": block, "f": floor, "r": room_code, "n": display_name, "lab": 1,
+                    "s": start, "e": end, "sub": subject or "",
+                    "bt": batch or "", "disc": disc or "", "sec": clean_sec or section or ""
+                })
+
+    blocks_formatted = { b: sorted(list(blocks_floors[b])) for b in sorted(blocks_floors.keys()) }
+    ann_result = {
+        "blocks": blocks_formatted,
+        "schedule": ann_schedule
+    }
+    with open(os.path.join(OUTPUT_DIR, 'announcements.bin'), 'w', encoding='utf-8') as f:
+        f.write(encode_data(ann_result))
+    print(f"Generated announcements.bin ({sum(len(v) for v in ann_schedule.values())} class/lab slots)")
+
+    # 7. Generate Version Manifest
     version_info = {
         "version": int(time.time()),
         "updatedAt": datetime.now(timezone.utc).isoformat()
