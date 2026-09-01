@@ -1472,6 +1472,12 @@ setInterval(() => {
         openAnnouncementsModal();
     });
 
+    // Nav item: Faculty Directory
+    document.getElementById('nav-item-faculty')?.addEventListener('click', () => {
+        closeDrawer();
+        openFacultyModal();
+    });
+
     // Nav item: Configure
     document.getElementById('nav-item-config')?.addEventListener('click', () => {
         closeDrawer();
@@ -1757,6 +1763,94 @@ setInterval(() => {
         }).join('');
     }
 
+    // --- Faculty Directory Modal ---
+    const facultyModal = document.getElementById('faculty-modal');
+    const closeFacultyModalBtn = document.getElementById('close-faculty-modal-btn');
+    const facultySearchInput = document.getElementById('faculty-search-input');
+    const facultyDeptBtns = document.querySelectorAll('#faculty-dept-grid [data-fdept]');
+    const facultyCountBadge = document.getElementById('faculty-count-badge');
+    const facultyCardsList = document.getElementById('faculty-cards-list');
+
+    let cachedFacultyData = null;
+    let selectedFacultyDept = 'ALL';
+
+    async function openFacultyModal() {
+        facultyModal?.classList.add('active');
+        if (!cachedFacultyData) {
+            if (facultyCardsList) facultyCardsList.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-tertiary);font-size:0.85rem">Loading faculty directory...</div>';
+            cachedFacultyData = await fetchDecoded('data/faculty.bin');
+            if (!cachedFacultyData) cachedFacultyData = await fetchDecoded('/data/faculty.bin');
+        }
+        renderFaculty();
+        setTimeout(() => facultySearchInput?.focus(), 50);
+    }
+
+    function closeFacultyModal() {
+        facultyModal?.classList.remove('active');
+    }
+
+    closeFacultyModalBtn?.addEventListener('click', closeFacultyModal);
+    facultyModal?.addEventListener('click', (e) => { if (e.target === facultyModal) closeFacultyModal(); });
+
+    facultyDeptBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            facultyDeptBtns.forEach(b => {
+                b.classList.remove('active');
+                b.setAttribute('aria-checked', 'false');
+            });
+            btn.classList.add('active');
+            btn.setAttribute('aria-checked', 'true');
+            selectedFacultyDept = btn.dataset.fdept;
+            renderFaculty();
+        });
+    });
+
+    facultySearchInput?.addEventListener('input', renderFaculty);
+
+    function renderFaculty() {
+        if (!cachedFacultyData || !facultyCardsList) return;
+
+        const query = (facultySearchInput?.value || '').trim().toLowerCase();
+        const allFaculty = cachedFacultyData.faculty || [];
+
+        const filtered = allFaculty.filter(f => {
+            if (selectedFacultyDept !== 'ALL') {
+                if (f.dept !== selectedFacultyDept) return false;
+            }
+            if (query) {
+                const combined = `${f.name} ${f.desig} ${f.email} ${f.office} ${f.dept}`.toLowerCase();
+                const queryClean = query.replace(/^dr\.?\s*/i, '');
+                if (!combined.includes(query) && !combined.includes(queryClean)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        if (facultyCountBadge) facultyCountBadge.textContent = `${filtered.length} Found`;
+
+        if (filtered.length === 0) {
+            facultyCardsList.innerHTML = '<div class="ann-empty-msg">No faculty members found matching your search.</div>';
+            return;
+        }
+
+        facultyCardsList.innerHTML = filtered.map(f => {
+            const hasOffice = f.office && f.office.trim() !== '';
+            return `
+            <div class="faculty-card">
+              <div class="faculty-card-top">
+                <div class="faculty-name">${f.name}</div>
+                ${hasOffice ? `<span class="faculty-office-pill">📍 ${f.office}</span>` : '<span class="faculty-office-pill" style="opacity:0.5">Office: N/A</span>'}
+              </div>
+              <div class="faculty-meta-row">
+                <span class="faculty-desig">${f.desig || ''}</span>
+                ${f.dept ? `<span class="faculty-dept-pill">${f.dept}</span>` : ''}
+              </div>
+              ${f.email ? `<a href="mailto:${f.email}" class="faculty-email-link">✉️ ${f.email}</a>` : ''}
+            </div>`;
+        }).join('');
+    }
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -1764,6 +1858,7 @@ setInterval(() => {
             if (drawerOverlay?.classList.contains('active')) { closeDrawer(); return; }
             if (roomsModal?.classList.contains('active')) { closeRoomsModal(); return; }
             if (annModal?.classList.contains('active')) { closeAnnModal(); return; }
+            if (facultyModal?.classList.contains('active')) { closeFacultyModal(); return; }
         }
         if (e.key === 'm' || e.key === 'M') {
             drawerOverlay?.classList.contains('active') ? closeDrawer() : openDrawer();
