@@ -63,7 +63,7 @@ function formatTime12(timeStr) {
 
 function isNotificationsEnabled() {
     const saved = localStorage.getItem('class_notifications_enabled');
-    if (saved === null) return true; // Enabled by default
+    if (saved === null) return false; // Off by default
     return saved === 'true';
 }
 
