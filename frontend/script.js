@@ -4,8 +4,8 @@ const themeToggleBtn = document.getElementById('theme-toggle');
 const sunIcon = document.getElementById('sun-icon');
 const moonIcon = document.getElementById('moon-icon');
 
-// Persist theme preference
-const savedTheme = localStorage.getItem('theme') || 'dark';
+// Persist theme preference (default light for new users)
+const savedTheme = localStorage.getItem('theme') || 'light';
 html.setAttribute('data-theme', savedTheme);
 updateThemeIcon(savedTheme);
 
@@ -46,6 +46,127 @@ function updateClock() {
 }
 updateClock();
 setInterval(updateClock, 10000);
+
+// === Class Notifications (10m Alert) ===
+function formatTime12(timeStr) {
+    if (!timeStr) return '';
+    const parts = timeStr.split(':');
+    if (parts.length < 2) return timeStr;
+    let h = parseInt(parts[0], 10);
+    const m = parts[1];
+    if (h >= 1 && h <= 7) h += 12;
+    if (h === 8 && parseInt(m, 10) < 30) h += 12;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${m} ${ampm}`;
+}
+
+function isNotificationsEnabled() {
+    const saved = localStorage.getItem('class_notifications_enabled');
+    if (saved === null) return true; // Enabled by default
+    return saved === 'true';
+}
+
+function syncNotifBadge() {
+    const badge = document.getElementById('nav-notif-status');
+    if (!badge) return;
+    const enabled = isNotificationsEnabled();
+    if (!enabled) {
+        badge.textContent = 'Off';
+        badge.classList.remove('active');
+        return;
+    }
+    if ('Notification' in window && Notification.permission === 'denied') {
+        badge.textContent = 'Blocked';
+        badge.classList.remove('active');
+        return;
+    }
+    badge.textContent = 'On';
+    badge.classList.add('active');
+}
+
+function sendClassNotification(title, body, tag) {
+    const options = {
+        body: body,
+        icon: '/icon-192.png',
+        badge: '/favicon-48.png',
+        tag: tag,
+        renotify: false,
+        data: { url: '/' }
+    };
+
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.ready.then(reg => {
+            reg.showNotification(title, options);
+        }).catch(() => {
+            try { new Notification(title, options); } catch(e) {}
+        });
+    } else if ('Notification' in window) {
+        try {
+            new Notification(title, options);
+        } catch(e) {
+            console.warn('Notification failed:', e);
+        }
+    }
+}
+
+function checkUpcomingClassesForNotification() {
+    if (!isNotificationsEnabled()) return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+    const now = new Date();
+    const todayDow = now.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+    if (todayDow < 1 || todayDow > 6) return;
+    const ttDayIdx = todayDow - 1;
+
+    let timetable = lastTimetableData;
+    if (!timetable) {
+        const cached = localStorage.getItem('cachedTimetable');
+        if (cached) {
+            try { timetable = JSON.parse(cached); } catch(e) {}
+        }
+    }
+    if (!timetable || !timetable[ttDayIdx] || !Array.isArray(timetable[ttDayIdx])) return;
+
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const todayDateKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+    
+    let sentMap = {};
+    try {
+        sentMap = JSON.parse(sessionStorage.getItem('notified_classes_' + todayDateKey) || '{}');
+    } catch(e) {
+        sentMap = {};
+    }
+
+    let updated = false;
+    timetable[ttDayIdx].forEach(cls => {
+        if (!cls || !cls.start_time || !cls.subject) return;
+        const startMinutes = parseTimeMinutes(cls.start_time);
+        const diff = startMinutes - nowMinutes;
+
+        // Notify 10 minutes before class starts (diff between 0 and 10 minutes)
+        if (diff >= 0 && diff <= 10) {
+            const clsKey = `${cls.subject}_${cls.start_time}`;
+            if (!sentMap[clsKey]) {
+                sentMap[clsKey] = true;
+                updated = true;
+
+                const diffText = diff === 0 ? 'starting now' : (diff === 1 ? 'in 1 minute' : `in ${diff} minutes`);
+                const title = `Class ${diffText}: ${cls.subject}`;
+                const body = `${cls.subject} starts at ${formatTime12(cls.start_time)}${cls.location ? ' in ' + cls.location : ''}.`;
+
+                sendClassNotification(title, body, `class-alert-${clsKey}-${todayDateKey}`);
+            }
+        }
+    });
+
+    if (updated) {
+        try {
+            sessionStorage.setItem('notified_classes_' + todayDateKey, JSON.stringify(sentMap));
+        } catch(e) {}
+    }
+}
+
 
 // === Toast Notifications ===
 function showToast(message, type = 'error', duration = 3000) {
@@ -694,8 +815,17 @@ form.addEventListener('submit', async (e) => {
             // Show grid, hide empty state
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
-            
             closeModal();
+
+            // Check / prompt notifications if enabled by default
+            if (isNotificationsEnabled() && 'Notification' in window && Notification.permission === 'default') {
+                Notification.requestPermission().then(() => {
+                    syncNotifBadge();
+                    checkUpcomingClassesForNotification();
+                }).catch(() => {});
+            } else {
+                checkUpcomingClassesForNotification();
+            }
             
             // Reset wizard to step 1 for next time
             step2.classList.remove('active-step');
@@ -776,6 +906,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
         // Check for updates in background (0ms delay to user)
         checkForTimetableUpdates();
+        checkUpcomingClassesForNotification();
     } else {
         // Automatically open configure modal on first load
         openModal();
@@ -1403,7 +1534,9 @@ setInterval(() => {
     }
     updateMobileDateText();
     checkForTimetableUpdates();
+    checkUpcomingClassesForNotification();
 }, 60000);
+checkUpcomingClassesForNotification();
 
 
 
@@ -1484,16 +1617,48 @@ setInterval(() => {
         openModal();
     });
 
-    // Nav item: Theme
-    const navThemeStatus = document.getElementById('nav-theme-status');
-    function syncThemeLabel() {
-        const t = document.documentElement.getAttribute('data-theme') || 'dark';
-        if (navThemeStatus) navThemeStatus.textContent = t === 'dark' ? 'Dark' : 'Light';
-    }
-    syncThemeLabel();
-    document.getElementById('nav-item-theme')?.addEventListener('click', () => {
-        document.getElementById('theme-toggle')?.click();
-        syncThemeLabel();
+    // Nav item: Class Notifications
+    syncNotifBadge();
+    document.getElementById('nav-item-notifications')?.addEventListener('click', async () => {
+        const enabled = isNotificationsEnabled();
+        if (enabled) {
+            // User toggles off / blocks
+            localStorage.setItem('class_notifications_enabled', 'false');
+            syncNotifBadge();
+            showToast('Class alerts turned off', 'info');
+        } else {
+            // User toggles on
+            if (!('Notification' in window)) {
+                showToast('Notifications are not supported in this browser', 'error');
+                return;
+            }
+            if (Notification.permission === 'denied') {
+                showToast('Notifications blocked in browser settings. Please allow them.', 'error', 4000);
+                syncNotifBadge();
+                return;
+            }
+            if (Notification.permission === 'default') {
+                try {
+                    const res = await Notification.requestPermission();
+                    if (res === 'granted') {
+                        localStorage.setItem('class_notifications_enabled', 'true');
+                        syncNotifBadge();
+                        showToast('Class alerts enabled (10m before class)', 'info');
+                        checkUpcomingClassesForNotification();
+                    } else {
+                        syncNotifBadge();
+                        showToast('Notification permission not granted', 'error');
+                    }
+                } catch (e) {
+                    showToast('Failed to request notification permission', 'error');
+                }
+            } else if (Notification.permission === 'granted') {
+                localStorage.setItem('class_notifications_enabled', 'true');
+                syncNotifBadge();
+                showToast('Class alerts enabled (10m before class)', 'info');
+                checkUpcomingClassesForNotification();
+            }
+        }
     });
 
     // --- Free Rooms Modal ---
@@ -2009,3 +2174,17 @@ function generateTimetablePNG() {
         showToast('Timetable exported!', 'info');
     }, 'image/png', 1.0);
 }
+
+// Register PWA Service Worker
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+            .then((reg) => {
+                console.log('PWA Service Worker registered:', reg.scope);
+            })
+            .catch((err) => {
+                console.log('Service Worker registration failed:', err);
+            });
+    });
+}
+
