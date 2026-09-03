@@ -322,6 +322,9 @@ def generate_static_data():
         cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND CLASSROOM IS NOT NULL")
         for r in cur.fetchall():
             room_code = r[0].strip()
+            # Exclude Block C Floor 1 (administration / faculty rooms)
+            if re.match(r'^C-1\d{2}', room_code, re.IGNORECASE):
+                continue
             if room_code and room_code not in rooms_data["rooms"]:
                 rooms_data["rooms"].append(room_code)
 
@@ -335,6 +338,8 @@ def generate_static_data():
                 match = re.search(r'\b([CD]-\d{3})\b', lab_str, re.IGNORECASE)
                 if match:
                     room_code = match.group(1).upper()
+                    if re.match(r'^C-1\d{2}', room_code, re.IGNORECASE):
+                        continue
                     if room_code not in rooms_data["rooms"]:
                         rooms_data["rooms"].append(room_code)
 
