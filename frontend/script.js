@@ -1697,7 +1697,7 @@ checkUpcomingClassesForNotification();
     function initRoomDefaults() {
         const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
         const today = dayNames[new Date().getDay()];
-        selectedDay = (today === 'Sunday' || today === 'Saturday') ? 'Monday' : today;
+        selectedDay = (today === 'Sunday') ? 'Monday' : today;
         dayBtns.forEach(b => {
             const active = b.dataset.day === selectedDay;
             b.classList.toggle('active', active);

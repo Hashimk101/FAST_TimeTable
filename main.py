@@ -5,8 +5,8 @@ from databaseHandler import (
     read_and_clean_classroom_df,
     read_and_clean_lab_df,
     fetch_timetable_for_section,
-    days_of_week,
-    get_sheets_service
+    get_sheets_service,
+    get_day_sheet_mapping
 )
 
 from main_menu import (
@@ -24,21 +24,28 @@ def main():
     make_database(LAB_DATABASE, 'LAB')
     
     service = get_sheets_service()
+    sheet_mapping = get_day_sheet_mapping(service, SPREADSHEET_ID, refresh=True)
+    print(f"Discovered day sheet mapping (hidden sheets skipped): {sheet_mapping}")
 
     for day in days_of_week:
+        if day not in sheet_mapping:
+            print(f"Skipping {day}: No visible/active sheet found.")
+            continue
+
+        actual_sheet = sheet_mapping[day]
         try:
             # classroom setup
-            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, day)
+            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, actual_sheet)
             insert_timetable(clean_df, day, COURSE_DATABASE, 'Room', 'CLASSROOM')
-            print(f"Inserted classroom timetable for {day}")
+            print(f"Inserted classroom timetable for {day} (from sheet '{actual_sheet}')")
             
             # lab setup
-            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, day)
+            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, actual_sheet)
             insert_timetable(clean_dflab, day, LAB_DATABASE, 'Lab', 'LAB')
-            print(f"Inserted lab timetable for {day}")
+            print(f"Inserted lab timetable for {day} (from sheet '{actual_sheet}')")
 
         except Exception as e:
-            print(f"Error processing {day}: {e}")
+            print(f"Error processing {day} (sheet '{actual_sheet}'): {e}")
 
     print("\nDatabase creation complete!")
     print("- Classroom timetable: uni_timetable.db")
