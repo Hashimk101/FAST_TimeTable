@@ -317,7 +317,7 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             r'^Tutorial\s',                # Tutorial Batch 26
             r'^EE$',                       # Standalone EE
             r'^FSM$',                      # Explicitly drop FSM
-            r'^PPIT\s*Seminar$'            # Explicitly drop PPIT Seminar
+            r'^PPIT\s*Seminar'             # Explicitly drop PPIT Seminar
         ]
         skip_words = {'prayer', 'break', 'tutorial', 'fsm', 'ppit seminar'}
 
@@ -408,6 +408,46 @@ def get_sheets_service():
             token.write(creds.to_json())
     return build('sheets', 'v4', credentials=creds)
 
+_day_sheet_cache = {}
+
+def get_day_sheet_mapping(service, spreadsheet_id: str, refresh: bool = False) -> dict:
+    """
+    Returns a mapping of canonical day name ("Monday".."Saturday") -> actual sheet title in Google Sheets.
+    Dismisses any text or date after the day name (e.g. "Saturday (Sep. 05, 2026)" -> "Saturday").
+    If the sheet was hidden then no need to read it (completely skipped).
+    Supports makeup sheets for any day (e.g. "Monday (Sep. 08)", "Saturday (Sep. 12)", "Makeup Friday").
+    """
+    if not refresh and spreadsheet_id in _day_sheet_cache:
+        return _day_sheet_cache[spreadsheet_id]
+
+    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheets = meta.get('sheets', [])
+    
+    # 1. Filter visible sheets only (hidden sheets do not count)
+    visible_titles = [
+        sheet.get('properties', {}).get('title', '').strip()
+        for sheet in sheets
+        if not sheet.get('properties', {}).get('hidden', False)
+    ]
+    
+    day_to_title = {}
+    # Pass 1: Leading day match (e.g. "Saturday (Sep. 05, 2026)", "Monday - Makeup", "Friday")
+    for title in visible_titles:
+        for day in days_of_week:
+            if day not in day_to_title and re.match(rf'^{day}\b', title, re.IGNORECASE):
+                day_to_title[day] = title
+                break
+
+    # Pass 2: Fallback for sheets like "Makeup Monday" or "Makeup - Saturday"
+    for title in visible_titles:
+        for day in days_of_week:
+            if day not in day_to_title and re.search(rf'\b{day}\b', title, re.IGNORECASE):
+                day_to_title[day] = title
+                break
+
+    _day_sheet_cache[spreadsheet_id] = day_to_title
+    return day_to_title
+
 def get_raw_sheet(service, spreadsheet_id, sheet_name):
     sheet = service.spreadsheets()
     result = sheet.get(
@@ -422,12 +462,16 @@ def get_raw_sheet(service, spreadsheet_id, sheet_name):
 
 def read_and_clean_classroom_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
     """Read and clean classroom timetable from Google Sheets."""
-    raw_values = get_raw_sheet(service, spreadsheet_id, sheet_name)
+    mapping = get_day_sheet_mapping(service, spreadsheet_id)
+    actual_sheet = mapping.get(sheet_name, sheet_name)
+    raw_values = get_raw_sheet(service, spreadsheet_id, actual_sheet)
     return sheets_to_df.sheets_to_classroom_df(raw_values)
 
 def read_and_clean_lab_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
     """Read and clean lab timetable from Google Sheets."""
-    raw_values = get_raw_sheet(service, spreadsheet_id, sheet_name)
+    mapping = get_day_sheet_mapping(service, spreadsheet_id)
+    actual_sheet = mapping.get(sheet_name, sheet_name)
+    raw_values = get_raw_sheet(service, spreadsheet_id, actual_sheet)
     return sheets_to_df.sheets_to_lab_df(raw_values)
 
 
@@ -448,12 +492,12 @@ class subjectEntry:
 
 
 def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list, batch: str = None) -> list:
-    # 0 to 4 -> Monday to Friday
+    # 0 to 5 -> Monday to Saturday
     list_of_days_in_timetable = []
 
     # Return empty structure if no subjects provided
     if not list_of_subs:
-        return [[] for _ in range(5)] # Assuming 5 days
+        return [[] for _ in range(len(days_of_week))]
 
     # Prepare the placeholder string (e.g., "?, ?, ?") for the SQL IN clause
     placeholders = ', '.join('?' for _ in list_of_subs)

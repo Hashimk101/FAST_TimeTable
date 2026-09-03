@@ -9,7 +9,8 @@ from databaseHandler import (
     read_and_clean_classroom_df,
     read_and_clean_lab_df,
     get_sheets_service,
-    correct_typos_in_db
+    correct_typos_in_db,
+    get_day_sheet_mapping
 )
 
 SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
@@ -21,16 +22,23 @@ def rebuild():
     make_database(LAB_DATABASE, 'LAB')
 
     service = get_sheets_service()
+    sheet_mapping = get_day_sheet_mapping(service, SPREADSHEET_ID, refresh=True)
+    print(f"Discovered day sheet mapping (hidden sheets skipped): {sheet_mapping}")
 
     for day in days_of_week:
-        try:
-            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, day)
-            insert_timetable(clean_df, day, COURSE_DATABASE, 'Room', 'CLASSROOM')
-            print(f"Inserted classroom timetable for {day}")
+        if day not in sheet_mapping:
+            print(f"Skipping {day}: No visible/active sheet found.")
+            continue
 
-            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, day)
+        actual_sheet = sheet_mapping[day]
+        try:
+            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, actual_sheet)
+            insert_timetable(clean_df, day, COURSE_DATABASE, 'Room', 'CLASSROOM')
+            print(f"Inserted classroom timetable for {day} (from sheet '{actual_sheet}')")
+
+            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, actual_sheet)
             insert_timetable(clean_dflab, day, LAB_DATABASE, 'Lab', 'LAB')
-            print(f"Inserted lab timetable for {day}")
+            print(f"Inserted lab timetable for {day} (from sheet '{actual_sheet}')")
 
         except Exception as e:
             print(f"Error processing {day}: {e}")

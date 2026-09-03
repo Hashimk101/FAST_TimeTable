@@ -1,6 +1,6 @@
 import re
 from collections import OrderedDict
-from databaseHandler import get_sheets_service, days_of_week
+from databaseHandler import get_sheets_service, days_of_week, get_day_sheet_mapping
 
 SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
 
@@ -67,24 +67,34 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
     and maps each subject to its offering batch(es) based on cell color matching.
     """
     service = get_sheets_service()
-    print("Fetching grid data from Google Sheets API with includeGridData=True...")
+    sheet_mapping = get_day_sheet_mapping(service, spreadsheet_id, refresh=True)
+    ranges_to_fetch = [sheet_mapping[d] for d in days_of_week if d in sheet_mapping]
+    print(f"Fetching grid data for ranges: {ranges_to_fetch}...")
     
-    # Request grid data for all day sheets
+    # Request grid data for all active/visible day sheets
     response = service.spreadsheets().get(
         spreadsheetId=spreadsheet_id,
-        ranges=days_of_week,
+        ranges=ranges_to_fetch,
         includeGridData=True
     ).execute()
 
     sheets = response.get('sheets', [])
 
-    # Step 1: Extract Legend Batch Colors from rows 1-4 of the first sheet (e.g. Monday)
+    # Step 1: Extract Legend Batch Colors from rows 1-4 of the Monday sheet
     # Legend structure: (Batch Name, RGB Tuple, Hex String)
     legend_batches = [] # List of dicts to preserve legend order
     legend_color_map = {} # RGB -> Batch Name
 
-    if sheets:
-        monday_data = sheets[0]['data'][0].get('rowData', [])
+    monday_sheet = None
+    for sh in sheets:
+        if sh.get('properties', {}).get('title', '').strip().lower().startswith('monday'):
+            monday_sheet = sh
+            break
+    if not monday_sheet and sheets:
+        monday_sheet = sheets[0]
+
+    if monday_sheet:
+        monday_data = monday_sheet['data'][0].get('rowData', [])
         # Rows 1 to 4 (index 0 to 3)
         for row_idx in range(min(4, len(monday_data))):
             row_cells = monday_data[row_idx].get('values', [])
@@ -133,7 +143,7 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
     batch_subject_links = set() # (batch_name, subject_name) tuples
 
     # Ignore list for schedule cell parsing
-    ignore_keywords = {"room", "lab", "nil", "day", "monday", "tuesday", "wednesday", "thursday", "friday", "timetable"}
+    ignore_keywords = {"room", "lab", "nil", "day", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "timetable"}
 
     for sheet in sheets:
         sheet_title = sheet['properties']['title']

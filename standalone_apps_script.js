@@ -17,10 +17,14 @@ function checkForUpdates() {
     // Read the current data from the sheet (this works even on view-only sheets!)
     var spreadsheet = SpreadsheetApp.openById(SHEET_ID);
     
-    // Read all day sheets to catch any text edits across Monday-Saturday
+    // Read all visible day sheets to catch any text edits across Monday-Saturday
     var sheets = spreadsheet.getSheets();
     var allData = [];
     for (var i = 0; i < sheets.length; i++) {
+      // If the sheet was hidden then no need to read it
+      if (sheets[i].isSheetHidden()) {
+        continue;
+      }
       var sheetName = sheets[i].getName();
       var data = sheets[i].getDataRange().getValues();
       var flatData = data.map(function(row) { return row.join(","); }).join(";");
