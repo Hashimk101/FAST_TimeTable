@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fast-timetable-v1';
+const CACHE_NAME = 'fast-timetable-v2';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
