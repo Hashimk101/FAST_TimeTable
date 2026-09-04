@@ -1,7 +1,7 @@
 {
-  "name": "FAST NUCES Timetable",
-  "short_name": "Timetable",
-  "description": "Interactive timetable and schedule builder for FAST NUCES students",
+  "name": "FAST NUCES Islamabad Timetable",
+  "short_name": "Timetable (ISB)",
+  "description": "Interactive timetable and schedule builder for FAST NUCES Islamabad students",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
