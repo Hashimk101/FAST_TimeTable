@@ -72,7 +72,7 @@ function checkForUpdates() {
   }
 }
 
-// RUN THIS FUNCTION ONCE MANUALLY TO SET UP THE 5-MINUTE TRIGGER
+// RUN THIS FUNCTION ONCE MANUALLY TO SET UP THE 1-HOUR TRIGGER
 function setupTrigger() {
   // Delete existing triggers to avoid duplicates
   var triggers = ScriptApp.getProjectTriggers();
@@ -80,11 +80,11 @@ function setupTrigger() {
     ScriptApp.deleteTrigger(triggers[i]);
   }
   
-  // Create a new trigger to run every 5 minutes
+  // Create a new trigger to run every 1 hour
   ScriptApp.newTrigger("checkForUpdates")
            .timeBased()
-           .everyMinutes(5)
+           .everyHours(1)
            .create();
            
-  Logger.log("Trigger created successfully! It will now check for updates every 5 minutes.");
+  Logger.log("Trigger created successfully! It will now check for updates every 1 hour.");
 }
