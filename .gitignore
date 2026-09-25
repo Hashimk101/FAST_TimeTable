@@ -1,3 +1,9 @@
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.production
+.env.*.local
+
 # Python junk
 __pycache__/
 *.py[cod]
