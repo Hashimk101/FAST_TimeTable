@@ -23,7 +23,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
+          pip install pandas numpy google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 openpyxl psycopg2-binary requests
 
       - name: Write Google OAuth Credentials
         env:
@@ -41,6 +41,12 @@ jobs:
       - name: Generate Obfuscated Static Binary Data
         run: |
           python generate_static_json.py
+
+      - name: Sync Faculty Schedules to Supabase
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python sync_faculty_to_supabase.py
 
       - name: Commit and Push Updated Data
         run: |

@@ -42,3 +42,16 @@ token.json
 fast-timetable-sync-09f3e092601a.json
 
 MIGRATION_AUTO_SYNC_POSTMORTEM.md
+
+# Sensitive Course Allocation spreadsheets & Excel files - NEVER commit
+*.xlsx
+*.xls
+Course Allocation*
+
+# Scratch & temporary analysis files
+scratch/
+check_df.py
+check_room_headers.py
+check_similar.py
+fast_nuces.db
+preview_menu.html
