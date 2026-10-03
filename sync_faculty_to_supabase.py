@@ -55,9 +55,21 @@ DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturda
 
 # Stopwords & Honorific Titles to strip during teacher matching
 HONORIFIC_PATTERN = re.compile(
-    r'^(dr|doctor|prof|professor|mr|ms|mrs|engr|syed|syeda|sheikh|pir|chaudhry|ch)\.?\s+',
+    r'^(dr|doctor|prof|professor|mr|ms|mrs|engr|syed|syeda|sheikh|pir|chaudhry|ch)\s+',
     re.IGNORECASE
 )
+
+# Explicit alias overrides for known institutional teacher naming variations
+KNOWN_FACULTY_ALIASES = {
+    "jawad hasan": "jawad.hassan@nu.edu.pk",
+    "jawad hassan": "jawad.hassan@nu.edu.pk",
+    "zirva": "zirva.shabbir@isb.nu.edu.pk",
+    "gul e zahra": "gul.zahra@isb.nu.edu.pk",
+    "m ajmal": "muhammad.ajmal@nu.edu.pk",
+    "m umer": "muhammad.umer@nu.edu.pk",
+    "maimoona": "maimoona.rasool@nu.edu.pk",
+    "areej": "areej.fatima@isb.nu.edu.pk",
+}
 
 # Known institutional canonical subject map
 CANONICAL_SUBJECT_MAP = {
@@ -156,11 +168,15 @@ CANONICAL_SUBJECT_MAP = {
     "functional english - lab": "Func Eng Lab",
 
     # Repeat/Elective/7th-sem Courses
+    "data warehousing & business intelligence": "Data Ware & BI",
+    "data warehousing and business intelligence": "Data Ware & BI",
+    "digital sustainability": "Digital Sustain",
     "knowledge representation & reasoning": "Knowl Rep",
     "knowledge representation and reasoning": "Knowl Rep",
     "advacned statistics": "Adv Stats",                # Excel typo
     "web programming": "Web Prog",
-    "fundamentals of data visualization": "Fund of Data Vis",
+    "fundamentals of data visualization": "Data Visualization",
+    "data visualization": "Data Visualization",
     "mlops": "MLOps",
     "deep learning for perception": "Deep Learn",
     "agentic artificial intelligence": "Agentic AI",
@@ -178,12 +194,17 @@ CANONICAL_SUBJECT_MAP = {
     "security operations": "Security Ops",
     "vulnerability assessment": "Vulnerability Asses.",
     "data warehousing and business intelligence lab": "Data Ware & BI Lab",
+    "data warehousing & business intelligence lab": "Data Ware & BI Lab",
+    "vision based ai agent": "Vision Based AI Agent",
 
     # Labs
     "programming fundamentals lab": "PF Lab",
-    "introduction to information & communication technologies": "IICT Lab",
-    "introduction to information and communication technologies": "IICT Lab",
-    "iict lab": "IICT Lab",
+    "introduction to information & communication technologies": "IICT",
+    "introduction to information and communication technologies": "IICT",
+    "introduction to information & communication technologies lab": "IICT",
+    "introduction to information and communication technologies lab": "IICT",
+    "iict": "IICT",
+    "iict lab": "IICT",
     "digital logic design lab": "DLD Lab",
     "object oriented programming lab": "OOP Lab",
     "data structures lab": "Data St Lab",
@@ -256,6 +277,7 @@ def normalize_person_name(name: str) -> Tuple[str, List[str]]:
         return "", []
     
     cleaned = re.sub(r'\(.*?\)', '', name).strip()
+    cleaned = re.sub(r'[\.\-_/]', ' ', cleaned).strip()
     
     while True:
         m = HONORIFIC_PATTERN.match(cleaned)
@@ -311,12 +333,16 @@ def find_faculty_match(
     if not clean_target or not target_tokens:
         return None
         
+    # 0. Check explicit known aliases
+    if clean_target in KNOWN_FACULTY_ALIASES:
+        target_email = KNOWN_FACULTY_ALIASES[clean_target]
+        for fac in faculty_roster:
+            if fac.get("email", "").lower().strip() == target_email:
+                return fac
+
     target_set = set(target_tokens)
     target_sorted = " ".join(sorted(target_tokens))
     
-    best_candidate = None
-    highest_score = 0.0
-
     for fac in faculty_roster:
         fac_name = fac.get("name", "")
         clean_fac, fac_tokens = normalize_person_name(fac_name)
@@ -534,11 +560,12 @@ def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH) -> List[Dict[s
                 continue
 
             sec_info = translate_section_code(sec_str)
-            canonical_subj = resolve_canonical_subject(curr_course, curr_code, is_lab=is_lab)
+            course_is_lab = is_lab or "lab" in curr_course.lower()
+            canonical_subj = resolve_canonical_subject(curr_course, curr_code, is_lab=course_is_lab)
 
             allocations.append({
                 "sheet": sheet_name,
-                "is_lab": is_lab,
+                "is_lab": course_is_lab,
                 "course_code": curr_code,
                 "course_title": curr_course,
                 "credit_hours": curr_chs,
@@ -651,37 +678,76 @@ def compile_faculty_schedules(
                 total_credit_hours += chs
             unique_courses_map[c_key]["sections"].add(sec_name)
 
-            target_cursor = cur_lab if is_lab else cur_theory
-            location_col = "LAB" if is_lab else "CLASSROOM"
+            base_subj = canonical_subj.replace(" Lab", "").strip()
+            disc = sec_name.split("-")[0] if "-" in sec_name else ""
+            letter = sec_name.split("-")[1] if "-" in sec_name else ""
+
+            cursors_to_try = [
+                (cur_lab, "LAB", True),
+                (cur_theory, "CLASSROOM", False)
+            ] if is_lab else [
+                (cur_theory, "CLASSROOM", False),
+                (cur_lab, "LAB", True)
+            ]
 
             rows = []
-            queries_to_try = []
-            
-            select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+            final_is_lab = is_lab
 
-            if b_name:
-                # 1. Exact Match
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
-                })
-                # 2. Fallback to 'BS Repeat Courses'
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
-                })
-            
-            # 3. Final Fallback (Ignore batch completely)
-            queries_to_try.append({
-                "query": f"{select_clause} WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
-            })
+            for target_cursor, location_col, actual_lab in cursors_to_try:
+                select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
-            for attempt in queries_to_try:
-                target_cursor.execute(attempt["query"], attempt["params"])
-                fetched = target_cursor.fetchall()
-                if fetched:
-                    rows = fetched
+                queries_to_try = []
+
+                if b_name:
+                    # 1. Exact batch + exact/substring section
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                        "params": (b_name, sec_name, f"%{sec_name}%") + subj_params
+                    })
+                    # 2. Combined section in exact batch (e.g. CS/CY-A)
+                    if disc and letter:
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                            "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
+                        })
+                    # 3. Fallback to 'BS Repeat Courses'
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                        "params": (sec_name, f"%{sec_name}%") + subj_params
+                    })
+                    if disc and letter:
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                            "params": (f"%{disc}%", f"%{letter}%") + subj_params
+                        })
+                    # 4. Fallback to 'BS Repeat Courses' with blank/null section (elective courses)
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                        "params": subj_params
+                    })
+
+                # 5. Final Fallback (Ignore batch completely)
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                    "params": (sec_name, f"%{sec_name}%") + subj_params
+                })
+                if disc and letter:
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                        "params": (f"%{disc}%", f"%{letter}%") + subj_params
+                    })
+
+                for attempt in queries_to_try:
+                    target_cursor.execute(attempt["query"], attempt["params"])
+                    fetched = target_cursor.fetchall()
+                    if fetched:
+                        rows = fetched
+                        final_is_lab = actual_lab
+                        break
+
+                if rows:
                     break
 
             for row in rows:
@@ -698,7 +764,7 @@ def compile_faculty_schedules(
                     "location": row["LOCATION"] or "",
                     "section": row["SECTION"] or sec_name,
                     "batch": row["BATCH"] or b_name or "",
-                    "is_lab": is_lab,
+                    "is_lab": final_is_lab,
                     "status": row["STATUS"]
                 }
 
@@ -912,34 +978,71 @@ def sync_from_existing_database(
             c_code = cls_info["course_code"]
             c_title = cls_info["course_name"]
 
-            target_cursor = cur_lab if is_lab else cur_theory
-            location_col = "LAB" if is_lab else "CLASSROOM"
+            base_subj = canonical_subj.replace(" Lab", "").strip()
+            disc = sec_name.split("-")[0] if "-" in sec_name else ""
+            letter = sec_name.split("-")[1] if "-" in sec_name else ""
+
+            cursors_to_try = [
+                (cur_lab, "LAB", True),
+                (cur_theory, "CLASSROOM", False)
+            ] if is_lab else [
+                (cur_theory, "CLASSROOM", False),
+                (cur_lab, "LAB", True)
+            ]
 
             matches = []
-            queries_to_try = []
-            
-            select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+            final_is_lab = is_lab
 
-            if b_name:
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
-                })
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
-                })
-            
-            queries_to_try.append({
-                "query": f"{select_clause} WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
-            })
+            for target_cursor, location_col, actual_lab in cursors_to_try:
+                select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
-            for attempt in queries_to_try:
-                target_cursor.execute(attempt["query"], attempt["params"])
-                fetched = target_cursor.fetchall()
-                if fetched:
-                    matches = fetched
+                queries_to_try = []
+
+                if b_name:
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                        "params": (b_name, sec_name, f"%{sec_name}%") + subj_params
+                    })
+                    if disc and letter:
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                            "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
+                        })
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                        "params": (sec_name, f"%{sec_name}%") + subj_params
+                    })
+                    if disc and letter:
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                            "params": (f"%{disc}%", f"%{letter}%") + subj_params
+                        })
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                        "params": subj_params
+                    })
+
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                    "params": (sec_name, f"%{sec_name}%") + subj_params
+                })
+                if disc and letter:
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                        "params": (f"%{disc}%", f"%{letter}%") + subj_params
+                    })
+
+                for attempt in queries_to_try:
+                    target_cursor.execute(attempt["query"], attempt["params"])
+                    fetched = target_cursor.fetchall()
+                    if fetched:
+                        matches = fetched
+                        final_is_lab = actual_lab
+                        break
+
+                if matches:
                     break
 
             for m in matches:
@@ -951,7 +1054,7 @@ def sync_from_existing_database(
                         "subject": m["SUBJECT"],
                         "batch": m["BATCH"],
                         "section": m["SECTION"],
-                        "is_lab": is_lab,
+                        "is_lab": final_is_lab,
                         "start_time": m["START_TIME"],
                         "end_time": m["END_TIME"],
                         "location": m["LOCATION"],
