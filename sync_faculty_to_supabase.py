@@ -736,7 +736,12 @@ def compile_faculty_schedules(
                             "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                             "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
                         })
-                    # 3. Fallback to 'BS Repeat Courses'
+                    # 3. Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Agentic AI)
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                        "params": (b_name,) + subj_params
+                    })
+                    # 4. Fallback to 'BS Repeat Courses'
                     queries_to_try.append({
                         "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
                         "params": (sec_name, f"%{sec_name}%") + subj_params
@@ -746,13 +751,13 @@ def compile_faculty_schedules(
                             "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                             "params": (f"%{disc}%", f"%{letter}%") + subj_params
                         })
-                    # 4. Fallback to 'BS Repeat Courses' with blank/null section (elective courses)
+                    # 5. Fallback to 'BS Repeat Courses' with blank/null section (elective courses)
                     queries_to_try.append({
                         "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                         "params": subj_params
                     })
 
-                # 5. Final Fallback (Ignore batch completely)
+                # 6. Final Fallback (Ignore batch completely with section)
                 queries_to_try.append({
                     "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
                     "params": (sec_name, f"%{sec_name}%") + subj_params
@@ -762,6 +767,11 @@ def compile_faculty_schedules(
                         "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                         "params": (f"%{disc}%", f"%{letter}%") + subj_params
                     })
+                # 7. Final Fallback (Ignore batch completely with blank/null section)
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                    "params": subj_params
+                })
 
                 for attempt in queries_to_try:
                     target_cursor.execute(attempt["query"], attempt["params"])
@@ -792,7 +802,17 @@ def compile_faculty_schedules(
                     "status": row["STATUS"]
                 }
 
-                if slot_entry not in weekly_schedule[day]:
+                duplicate_found = False
+                for existing in weekly_schedule[day]:
+                    if (existing["start_time"] == slot_entry["start_time"] and 
+                        existing["end_time"] == slot_entry["end_time"] and
+                        existing["subject"] == slot_entry["subject"]):
+                        if sec_name and sec_name not in existing["section"]:
+                            existing["section"] = f"{existing['section']}, {sec_name}"
+                        duplicate_found = True
+                        break
+
+                if not duplicate_found:
                     weekly_schedule[day].append(slot_entry)
                     total_slots += 1
 
