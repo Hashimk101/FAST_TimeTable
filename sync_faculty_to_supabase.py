@@ -71,6 +71,11 @@ KNOWN_FACULTY_ALIASES = {
     "areej": "areej.fatima@isb.nu.edu.pk",
 }
 
+# Instructors in allocation sheet who are distinct visiting/different individuals despite sharing a surname
+EXCLUDED_SUBSET_MATCHES = {
+    "zareen",  # Ms. Zareen (teaches TBW) is distinct from Ms. Aseefa Zareen (teaches Pak Studies)
+}
+
 # Known institutional canonical subject map
 CANONICAL_SUBJECT_MAP = {
     # Theory Courses
@@ -359,6 +364,10 @@ def find_faculty_match(
         # 2. Strict Token-Set Equality
         if target_set == fac_set:
             return fac
+
+    # Check subset exclusions (e.g. 'zareen' != 'aseefa zareen')
+    if clean_target in EXCLUDED_SUBSET_MATCHES:
+        return None
 
     # 3. Unique Subset Match
     subset_matches = []
