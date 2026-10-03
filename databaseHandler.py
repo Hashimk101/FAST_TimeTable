@@ -431,6 +431,13 @@ def get_day_sheet_mapping(service, spreadsheet_id: str, refresh: bool = False) -
     ]
     
     day_to_title = {}
+    # Pass 0: Exact day name match (e.g. "Monday", "Tuesday", "Saturday")
+    for day in days_of_week:
+        for title in visible_titles:
+            if title.lower() == day.lower():
+                day_to_title[day] = title
+                break
+
     # Pass 1: Leading day match (e.g. "Saturday (Sep. 05, 2026)", "Monday - Makeup", "Friday")
     for title in visible_titles:
         for day in days_of_week:
