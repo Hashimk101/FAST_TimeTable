@@ -136,6 +136,48 @@ CANONICAL_SUBJECT_MAP = {
     "blockchain": "Blockchain",
     "game design and development": "Game Design",
     "fundamentals of software project management": "Fund of SPM",
+    "computer architecture": "Comp Arch",
+    "professional practices in it": "PPIT",
+    "software for mobile devices": "SMD",
+
+    # S&H / Humanities Courses (Excel titles → timetable DB subjects)
+    "calculus & anlytical geometry": "Calculus",       # Excel typo variant
+    "ideology and constitution of pakistan": "Ideology of Pak",
+    "islamic studies/ethics": "Islamic",
+    "understanding sirat un nabi": "Seerah",
+    "understanding sirat-un-nabi": "Seerah",
+    "understanding of holy quran-i": "UHQ-I&II",
+    "understanding of holy quran-ii": "UHQ-II",
+    "understanding of holy quran ii/ethics ii": "UHQ-II",
+    "understanding of holy quran-i & ii": "UHQ-I&II",
+    "pakistan studies": "Pak Studies",
+    "arts and humanities and technology": "Arts & Humanities",
+    "functional english- lab": "Func Eng Lab",         # Excel dash variant
+    "functional english - lab": "Func Eng Lab",
+
+    # Repeat/Elective/7th-sem Courses
+    "knowledge representation & reasoning": "Knowl Rep",
+    "knowledge representation and reasoning": "Knowl Rep",
+    "advacned statistics": "Adv Stats",                # Excel typo
+    "web programming": "Web Prog",
+    "fundamentals of data visualization": "Fund of Data Vis",
+    "mlops": "MLOps",
+    "deep learning for perception": "Deep Learn",
+    "agentic artificial intelligence": "Agentic AI",
+    "multiagent systems and game theory": "Multiagent Sys",
+    "edge computing and intelligent systems": "Edge Comp",
+    "information assurance": "Info Assur",
+    "blockchain and cryptocurrency": "Blockchain",
+    "blockchain technologies and applications": "Blockchain",
+    "formal methods in software engineering": "Formal Methods",
+    "process mining and simulation": "Process Mining",
+    "software construction and develpment": "S/w Const",  # Excel typo
+    "ai product development": "AI Prod Dev",
+    "secure systems design": "Secure Sys",
+    "prgramming for ai": "Prog for AI",                # Excel typo
+    "security operations": "Security Ops",
+    "vulnerability assessment": "Vulnerability Asses.",
+    "data warehousing and business intelligence lab": "Data Ware & BI Lab",
 
     # Labs
     "programming fundamentals lab": "PF Lab",
@@ -152,12 +194,16 @@ CANONICAL_SUBJECT_MAP = {
     "computer networks lab": "Comp Net Lab",
     "software construction & development lab": "S/w Const Lab",
     "software construction and development lab": "S/w Const Lab",
+    "software construction and development - lab": "S/w Const Lab",
     "artificial intelligence lab": "AI Lab",
     "machine learning lab": "ML Lab",
     "introduction to data science lab": "Intro to DS Lab",
     "data analysis & visualization lab": "DAV Lab",
     "data warehousing & bi lab": "Data Ware & BI Lab",
     "functional english lab": "Func Eng Lab",
+    "programming for ai lab": "Prof for AI Lab",
+    "security operations and administration lab": "Sec Ops",
+    "vulnerability assessment lab": "Vulnerability Assesment Lab",
 
     # Graduate / MS Courses
     "applied programming": "Applied Programming MS",
@@ -181,6 +227,7 @@ CANONICAL_SUBJECT_MAP = {
     "machine learning for cyber security": "CY & Net Security",
     "stat. & mathematical methods for data science": "Stat & Math",
     "data science tools and techniques": "DS Tools & Tech",
+    "advanced topics in generative ai": "Adv Topics in Gen AI",
     "uhq_i&ii": "UHQ-I & II",
     "uhq-i&ii": "UHQ-I & II"
 }
@@ -591,23 +638,35 @@ def compile_faculty_schedules(
             target_cursor = cur_lab if is_lab else cur_theory
             location_col = "LAB" if is_lab else "CLASSROOM"
 
-            if b_name:
-                query = f"""
-                    SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS
-                    FROM timetable
-                    WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)
-                """
-                params = (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
-            else:
-                query = f"""
-                    SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS
-                    FROM timetable
-                    WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)
-                """
-                params = (sec_name, canonical_subj, f"%{canonical_subj}%")
+            rows = []
+            queries_to_try = []
+            
+            select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
 
-            target_cursor.execute(query, params)
-            rows = target_cursor.fetchall()
+            if b_name:
+                # 1. Exact Match
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
+                })
+                # 2. Fallback to 'BS Repeat Courses'
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
+                })
+            
+            # 3. Final Fallback (Ignore batch completely)
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
+            })
+
+            for attempt in queries_to_try:
+                target_cursor.execute(attempt["query"], attempt["params"])
+                fetched = target_cursor.fetchall()
+                if fetched:
+                    rows = fetched
+                    break
 
             for row in rows:
                 day = row["DAY"]
@@ -840,23 +899,32 @@ def sync_from_existing_database(
             target_cursor = cur_lab if is_lab else cur_theory
             location_col = "LAB" if is_lab else "CLASSROOM"
 
-            if b_name:
-                query = f"""
-                    SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS
-                    FROM timetable
-                    WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)
-                """
-                params = (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
-            else:
-                query = f"""
-                    SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS
-                    FROM timetable
-                    WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)
-                """
-                params = (sec_name, canonical_subj, f"%{canonical_subj}%")
+            matches = []
+            queries_to_try = []
+            
+            select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
 
-            target_cursor.execute(query, params)
-            matches = target_cursor.fetchall()
+            if b_name:
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE BATCH = ? AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (b_name, sec_name, canonical_subj, f"%{canonical_subj}%")
+                })
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
+                })
+            
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE SECTION = ? AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                "params": (sec_name, canonical_subj, f"%{canonical_subj}%")
+            })
+
+            for attempt in queries_to_try:
+                target_cursor.execute(attempt["query"], attempt["params"])
+                fetched = target_cursor.fetchall()
+                if fetched:
+                    matches = fetched
+                    break
 
             for m in matches:
                 m_day = m["DAY"]
