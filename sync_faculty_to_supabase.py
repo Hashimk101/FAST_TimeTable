@@ -66,9 +66,17 @@ KNOWN_FACULTY_ALIASES = {
     "zirva": "zirva.shabbir@isb.nu.edu.pk",
     "gul e zahra": "gul.zahra@isb.nu.edu.pk",
     "m ajmal": "muhammad.ajmal@nu.edu.pk",
-    "m umer": "muhammad.umer@nu.edu.pk",
+    "m umer": "muhammad.umer@isb.nu.edu.pk",
     "maimoona": "maimoona.rasool@nu.edu.pk",
-    "areej": "areej.fatima@isb.nu.edu.pk",
+    "maimoona rasool": "maimoona.rasool@nu.edu.pk",
+    "aisha ijaz": "aisha.ijaz@nu.edu.pk",
+    "aisha": "aisha.ijaz@nu.edu.pk",
+    "ghalia gohar": "ghalia.gohar@nu.edu.pk",
+    "ghalia": "ghalia.gohar@nu.edu.pk",
+    "hamda": "hamda.khan@nu.edu.pk",
+    "momal": "momal.saleem@nu.edu.pk",
+    "khubab": "khubab.ahmed@isb.nu.edu.pk",
+    "sehrish hassan shigri": "sehrish.hassan@nu.edu.pk",
 }
 
 # Instructors in allocation sheet who are distinct visiting/different individuals despite sharing a surname
@@ -370,30 +378,37 @@ def find_faculty_match(
         return None
 
     # 3. Unique Subset Match
-    subset_matches = []
-    for fac in faculty_roster:
-        clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
-        fac_set = set(fac_tokens)
-        if target_set.issubset(fac_set) or fac_set.issubset(target_set):
-            subset_matches.append(fac)
-    
-    if len(subset_matches) == 1:
-        return subset_matches[0]
+    # Requires at least 2 tokens in target (e.g. 'Arshad Islam', 'Atif Jilani', 'Zaheer Sani')
+    # Target tokens must be a strict subset of faculty tokens (target_set.issubset(fac_set))
+    # NEVER allow fac_set.issubset(target_set) because that means target has an extra surname like 'Shiekh' or 'Farooq'!
+    if len(target_tokens) >= 2:
+        subset_matches = []
+        for fac in faculty_roster:
+            clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
+            fac_set = set(fac_tokens)
+            if target_set.issubset(fac_set) and len(fac_set) > len(target_set):
+                if target_tokens[0] in fac_tokens:
+                    subset_matches.append(fac)
+        
+        if len(subset_matches) == 1:
+            return subset_matches[0]
 
-    # 4. Fuzzy Match (Levenshtein ratio >= 0.85)
-    best_fac = None
-    best_ratio = 0.0
-    for fac in faculty_roster:
-        clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
-        fac_sorted = " ".join(sorted(fac_tokens))
-        # Use token sorted normalized distance
-        ratio = normalized_levenshtein_ratio(target_sorted, fac_sorted)
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_fac = fac
+    # 4. Fuzzy Match (Levenshtein ratio >= 0.88, requires target to have >= 2 tokens)
+    if len(target_tokens) >= 2:
+        best_fac = None
+        best_ratio = 0.0
+        for fac in faculty_roster:
+            clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
+            if len(fac_tokens) < 2:
+                continue
+            fac_sorted = " ".join(sorted(fac_tokens))
+            ratio = normalized_levenshtein_ratio(target_sorted, fac_sorted)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_fac = fac
 
-    if best_ratio >= 0.85:
-        return best_fac
+        if best_ratio >= 0.88:
+            return best_fac
 
     return None
 
