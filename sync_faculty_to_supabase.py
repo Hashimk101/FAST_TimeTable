@@ -330,21 +330,37 @@ def find_faculty_match(
         if clean_target == clean_fac:
             return fac
 
-        # 2. Strict Token-Set Equality (e.g. "Muhammad Ali" vs "Ali Muhammad")
-        if target_set == fac_set and len(target_tokens) == len(fac_tokens):
+        # 2. Strict Token-Set Equality
+        if target_set == fac_set:
             return fac
-            
-        # 3. Disallow partial matching if token counts differ by more than 1
-        if abs(len(target_tokens) - len(fac_tokens)) > 1:
-            continue
-            
-        # 4. Normalized Levenshtein similarity on sorted tokens
-        ratio = normalized_levenshtein_ratio(target_sorted, fac_sorted)
-        if ratio >= threshold and ratio > highest_score:
-            highest_score = ratio
-            best_candidate = fac
 
-    return best_candidate
+    # 3. Unique Subset Match
+    subset_matches = []
+    for fac in faculty_roster:
+        clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
+        fac_set = set(fac_tokens)
+        if target_set.issubset(fac_set) or fac_set.issubset(target_set):
+            subset_matches.append(fac)
+    
+    if len(subset_matches) == 1:
+        return subset_matches[0]
+
+    # 4. Fuzzy Match (Levenshtein ratio >= 0.85)
+    best_fac = None
+    best_ratio = 0.0
+    for fac in faculty_roster:
+        clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
+        fac_sorted = " ".join(sorted(fac_tokens))
+        # Use token sorted normalized distance
+        ratio = normalized_levenshtein_ratio(target_sorted, fac_sorted)
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_fac = fac
+
+    if best_ratio >= 0.85:
+        return best_fac
+
+    return None
 
 # =============================================================================
 # 2. SECTION TRANSLATOR & CANONICAL SUBJECT RESOLVER
@@ -579,7 +595,7 @@ def compile_faculty_schedules(
 
     if unmatched_instructors:
         print(f"[INFO] Generated synthetic accounts for {len(unmatched_instructors)} visiting/external faculty:")
-        for u in sorted(unmatched_instructors)[:5]:
+        for u in sorted(unmatched_instructors):
             print(f"  - {u}")
 
     print(f"Matched allocations to {len(faculty_allocations)} faculty members.")
