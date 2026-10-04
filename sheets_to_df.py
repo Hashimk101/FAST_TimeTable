@@ -78,31 +78,47 @@ def _extract_legend(row_data: list) -> dict:
                 legend_color_map[rgb] = clean_val
     return legend_color_map
 
+def _find_evening_start_col(row_data: list) -> int:
+    """Finds the column index of the secondary 'Room' header for evening classes."""
+    for row in row_data[:10]:
+        cells = row.get('values', [])
+        room_cols = []
+        for idx, cell in enumerate(cells):
+            val = str(cell.get('formattedValue', '')).strip()
+            if re.search(r'\broom\b', val, re.IGNORECASE):
+                room_cols.append(idx)
+        if len(room_cols) >= 2:
+            return room_cols[1]
+    return float('inf')
+
 def _grid_to_dataframe(row_data: list) -> DataFrame:
     if not row_data:
         return DataFrame()
         
     legend_color_map = _extract_legend(row_data)
+    evening_start_col = _find_evening_start_col(row_data)
     
     table = []
     for row in row_data:
         row_vals = []
         cells = row.get('values', [])
-        for cell in cells:
+        for col_idx, cell in enumerate(cells):
             val = str(cell.get('formattedValue', '')).strip()
             if val and val != "None":
-                fmt = cell.get('effectiveFormat', {})
-                bg = fmt.get('backgroundColor', {})
-                rgb = _normalize_color(bg)
-                
-                batch = None
-                for l_rgb, b_name in legend_color_map.items():
-                    if _is_color_similar(rgb, l_rgb, 5):
-                        batch = b_name
-                        break
-                        
-                if batch:
-                    val = f"{val} [{batch}]"
+                # Only apply BS legend color mapping to daytime columns
+                if col_idx < evening_start_col:
+                    fmt = cell.get('effectiveFormat', {})
+                    bg = fmt.get('backgroundColor', {})
+                    rgb = _normalize_color(bg)
+                    
+                    batch = None
+                    for l_rgb, b_name in legend_color_map.items():
+                        if _is_color_similar(rgb, l_rgb, 5):
+                            batch = b_name
+                            break
+                            
+                    if batch:
+                        val = f"{val} [{batch}]"
             else:
                 val = ""
             row_vals.append(val)
