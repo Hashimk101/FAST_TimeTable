@@ -89,15 +89,17 @@ def rebuild_subjects_db():
         corrected_batch_subject_links.add((batch_name, subject_name))
     # ---------------------------
 
-    # Insert Batches (Only BS batches)
+    # Insert Batches (BS, MS, and PhD batches)
     batch_name_to_id = {}
     for batch in legend_batches:
         b_name = batch['name']
-        if not b_name.startswith('BS'):
+        if not b_name:
             continue
         cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, batch['hex']))
         cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
-        batch_name_to_id[b_name] = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        if row:
+            batch_name_to_id[b_name] = row[0]
 
     # Authoritative Batch-Subject mappings directly from timetable databases
     for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
@@ -105,7 +107,7 @@ def rebuild_subjects_db():
             try:
                 with sqlite3.connect(db_file) as c_conn:
                     c_cursor = c_conn.cursor()
-                    c_cursor.execute("SELECT DISTINCT BATCH, SUBJECT FROM timetable WHERE BATCH LIKE 'BS%' AND SUBJECT IS NOT NULL AND SUBJECT != ''")
+                    c_cursor.execute("SELECT DISTINCT BATCH, SUBJECT FROM timetable WHERE BATCH IS NOT NULL AND BATCH != '' AND SUBJECT IS NOT NULL AND SUBJECT != ''")
                     for b_name, s_name in c_cursor.fetchall():
                         b_name = (b_name or '').strip()
                         s_name = (s_name or '').strip()
@@ -117,6 +119,16 @@ def rebuild_subjects_db():
             except Exception as e:
                 print(f"Warning: Could not read batch-subject mappings from {db_file}: {e}")
 
+    # Register any batches discovered from timetable databases (MS, PhD, Electives)
+    for b_name, _ in corrected_batch_subject_links:
+        if b_name not in batch_name_to_id:
+            color_hex = '#1e3a8a' if b_name.startswith('PhD') else ('#7c3aed' if 'Elective' in b_name else '#0284c7')
+            cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, color_hex))
+            cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
+            row = cursor.fetchone()
+            if row:
+                batch_name_to_id[b_name] = row[0]
+
     # Insert Subjects
     subject_name_to_id = {}
     for name, short in corrected_unique_subjects.items():
@@ -124,11 +136,9 @@ def rebuild_subjects_db():
         cursor.execute("SELECT id FROM subjects WHERE name = ?", (name,))
         subject_name_to_id[name] = cursor.fetchone()[0]
 
-    # Insert Batch-Subject Links (Strictly BS batches)
+    # Insert Batch-Subject Links (All batches: BS, MS, PhD, Electives)
     inserted_links = 0
     for batch_name, subject_name in corrected_batch_subject_links:
-        if not batch_name.startswith('BS'):
-            continue
         batch_id = batch_name_to_id.get(batch_name)
         subject_id = subject_name_to_id.get(subject_name)
 
