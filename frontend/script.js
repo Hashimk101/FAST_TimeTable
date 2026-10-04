@@ -282,9 +282,21 @@ nextBtn.addEventListener('click', async () => {
     const course = document.getElementById('course-input').value;
     const section = document.getElementById('section-input').value.trim();
 
-    if (!batch || !course || !section) {
-        showToast("Please select your batch, course, and enter your section.");
+    if (!batch) {
+        showToast("Please select your batch.");
         return;
+    }
+
+    if (batch.startsWith("MS")) {
+        if (!course) {
+            showToast("Please select your MS discipline.");
+            return;
+        }
+    } else if (!batch.startsWith("PhD")) {
+        if (!course || !section) {
+            showToast("Please select both a Discipline and a Section.");
+            return;
+        }
     }
 
     // Move to step 2
@@ -400,15 +412,16 @@ async function initBatches() {
         select.innerHTML = '<option value="" disabled selected>Select Batch</option>';
 
         if (batches && Array.isArray(batches)) {
-            // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25")
+            // Extract unique batch prefixes (e.g., "BS 25 CS" -> "BS 25", "MS CS" -> "MS", "PhD (Computing)" -> "PhD")
             const seenPrefixes = new Set();
             batches.forEach(b => {
-                if (b.name && b.name.startsWith('BS') && !b.name.includes('Repeat') && !b.name.includes('Elective')) {
-                    // Strip the last word (discipline) to get prefix like "BS 25"
+                if (b.name && !b.name.includes('Repeat') && !b.name.includes('Elective')) {
                     const parts = b.name.split(' ');
                     let prefix;
                     if (parts.length >= 3 && /^\d{2}$/.test(parts[1])) {
                         prefix = parts.slice(0, 2).join(' ');
+                    } else if (b.name.startsWith('PhD')) {
+                        prefix = "PhD";
                     } else {
                         prefix = parts[0];
                     }
@@ -436,13 +449,26 @@ async function initBatches() {
 async function loadStep2Data(batchName, courseName) {
     const profile = document.querySelector('input[name="student_profile"]:checked').value;
     const isRepeater = profile === 'repeater';
-    const exactBatch = courseName ? `${batchName} ${courseName}`.trim() : batchName;
+    let exactBatch = (courseName && !batchName.includes(courseName)) ? `${batchName} ${courseName}`.trim() : batchName;
+    if (batchName === 'PhD' || batchName.startsWith('PhD')) {
+        exactBatch = 'PhD (Computing)';
+    }
 
     try {
         // 1. Regular subjects from static data
         const allSubjectsMap = await fetchDecoded('/data/subjects.bin') || {};
         const regSubjects = allSubjectsMap[exactBatch] || allSubjectsMap[batchName] || allSubjectsMap['ALL'] || [];
         renderSubjects(regSubjects, 'subject-list', true);
+
+        // 2. Electives (Only show for MS batches)
+        const electivesSection = document.getElementById('electives-section');
+        if (batchName.startsWith('MS')) {
+            if (electivesSection) electivesSection.style.display = 'flex';
+            const electives = await fetchDecoded('/data/electives.bin') || [];
+            renderSubjects(electives, 'electives-list', false);
+        } else {
+            if (electivesSection) electivesSection.style.display = 'none';
+        }
 
         // 3. Repeater Data
         if (isRepeater) {
@@ -616,7 +642,10 @@ window.removeRepeatCourse = function(index) {
 async function buildTimetableFromConfig(config, versionId = '') {
     if (!config) return null;
     const { batch, course, section, subjects = [], names = [], repeat_courses = [] } = config;
-    const exactBatch = (course && !batch.includes(course)) ? `${batch} ${course}`.trim() : batch;
+    let exactBatch = (course && !batch.includes(course)) ? `${batch} ${course}`.trim() : batch;
+    if (batch === 'PhD' || batch.startsWith('PhD')) {
+        exactBatch = 'PhD (Computing)';
+    }
 
     let cosec = '';
     if (course && section) {
@@ -633,11 +662,21 @@ async function buildTimetableFromConfig(config, versionId = '') {
     const mergedTimetable = [[], [], [], [], [], []];
 
     // 1. Fetch primary section schedule
-    const primaryFile = cosecSlug 
-        ? `/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin` 
-        : `/data/schedules/${primaryBatchSlug}__.bin`;
-    let primaryData = await fetchDecoded(primaryFile, versionId);
+    let primaryData = null;
+    if (cosecSlug) {
+        primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__${cosecSlug}.bin`, versionId);
+    }
+    // For MS sections like MCS-A, MSE-A, MAI-A, MCY-A, MDS-A, MCI-A, MS-AIHS-A
+    if (!primaryData && batch.startsWith('MS') && course && section) {
+        const msSec = sanitizeSlug(`M${course}-${section}`);
+        primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__${msSec}.bin`, versionId);
+    }
+    // Fall back to batch-level schedule (e.g. MS_CS__.bin, PhD__Computing___.bin)
     if (!primaryData) {
+        primaryData = await fetchDecoded(`/data/schedules/${primaryBatchSlug}__.bin`, versionId);
+    }
+    // Fall back to ALL__cosecSlug.bin (for cross-batch BS sections)
+    if (!primaryData && cosecSlug) {
         primaryData = await fetchDecoded(`/data/schedules/ALL__${cosecSlug}.bin`, versionId);
     }
 
@@ -762,10 +801,17 @@ form.addEventListener('submit', async (e) => {
         return;
     }
 
-    // Step 1 Validation: Must have Discipline and Section
-    if (!course || !section) {
-        showToast("Please select both a Discipline and a Section.");
-        return;
+    // Step 1 Validation: Non-MS/PhD batches MUST have Discipline and Section
+    if (!batch.startsWith("MS") && !batch.startsWith("PhD")) {
+        if (!course || !section) {
+            showToast("Please select both a Discipline and a Section.");
+            return;
+        }
+    } else if (batch.startsWith("MS")) {
+        if (!course) {
+            showToast("Please select your MS discipline.");
+            return;
+        }
     }
 
     const btn = document.getElementById('generate-btn');
@@ -832,7 +878,9 @@ form.addEventListener('submit', async (e) => {
             if (offlineBanner) offlineBanner.style.display = 'none';
             
             // Update configure button
-            openBtn.innerHTML = `${gearSvg} ${course}-${section}`;
+            const btnParts = [course, section].filter(Boolean);
+            const btnLabel = btnParts.length ? btnParts.join('-') : (course || batch || 'Configure');
+            openBtn.innerHTML = `${gearSvg} ${btnLabel}`;
             
             // Show grid, hide empty state
             document.getElementById('empty-state').style.display = 'none';
@@ -877,7 +925,9 @@ form.addEventListener('submit', async (e) => {
             const offlineBanner = document.getElementById('offline-banner');
             if (offlineBanner) offlineBanner.style.display = 'flex';
 
-            openBtn.innerHTML = `${gearSvg} ${lastConfig.batch}-${lastConfig.course}-${lastConfig.section}`;
+            const offParts = [lastConfig.course, lastConfig.section].filter(Boolean);
+            const offLabel = offParts.length ? offParts.join('-') : (lastConfig.course || lastConfig.batch || 'Configure');
+            openBtn.innerHTML = `${gearSvg} ${offLabel}`;
             document.getElementById('empty-state').style.display = 'none';
             document.getElementById('week-grid').style.display = 'grid';
             closeModal();
@@ -921,7 +971,9 @@ window.addEventListener('DOMContentLoaded', () => {
         if (typeof renderMobileSubjectPills === 'function') renderMobileSubjectPills();
         if (typeof restoreSubjectSelections === 'function') restoreSubjectSelections();
         
-        openBtn.innerHTML = `${gearSvg} ${lastConfig.course}-${lastConfig.section}`;
+        const initParts = [lastConfig.course, lastConfig.section].filter(Boolean);
+        const initLabel = initParts.length ? initParts.join('-') : (lastConfig.course || lastConfig.batch || 'Configure');
+        openBtn.innerHTML = `${gearSvg} ${initLabel}`;
         document.getElementById('empty-state').style.display = 'none';
         document.getElementById('week-grid').style.display = 'grid';
         closeModal();
@@ -958,7 +1010,10 @@ function updateStatusBar(batch, course, section, subjects, names) {
     const pills = document.getElementById('subject-pills');
     
     bar.style.display = 'block';
-    label.textContent = `${batch}-${course}-${section}`;
+    const labelParts = [batch, course, section].filter(p => p && p.trim() !== '');
+    label.textContent = labelParts.length > 2 
+        ? `${labelParts[0]} ${labelParts[1]} - ${labelParts[2]}` 
+        : labelParts.join(' ');
     pills.innerHTML = '';
     
     subjects.forEach((sub, i) => {
