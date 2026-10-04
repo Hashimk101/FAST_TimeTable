@@ -53,6 +53,53 @@ def _parse_batch_name(raw_name: str) -> str:
         return f"BS{year_str} {disc}".strip()
     return ""
 
+STATIC_EVENING_LEGEND = {
+    (255, 255, 0): "BS Repeat Courses",
+    (102, 255, 255): "MS CS",
+    (255, 229, 153): "MS AI",
+    (255, 153, 0): "MS Electives (All Prgrms)",
+    (191, 191, 191): "MS DS",
+    (197, 224, 179): "MS CY",
+    (203, 144, 255): "MS Computational Intelligence",
+    (104, 255, 145): "MS AI in Health Sciences",
+    (255, 0, 0): "MS SE",
+    (70, 189, 198): "PhD (Computing)"
+}
+
+def _normalize_evening_batch_name(raw_name: str) -> str:
+    raw_name = raw_name.strip()
+    clean = re.sub(r'\(CS\)', 'CS', raw_name, flags=re.IGNORECASE)
+    clean = re.sub(r'\(AI\)', 'AI', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\(DS\)', 'DS', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\(CY\)', 'CY', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\(SE\)', 'SE', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean
+
+def _extract_evening_legend(row_data: list, evening_start_col: int) -> dict:
+    evening_legend = dict(STATIC_EVENING_LEGEND)
+    if evening_start_col == float('inf'):
+        return evening_legend
+
+    for row_idx in range(min(5, len(row_data))):
+        cells = row_data[row_idx].get('values', [])
+        for col_idx in range(min(int(evening_start_col), len(cells)), len(cells)):
+            cell = cells[col_idx]
+            val = str(cell.get('formattedValue', '')).strip()
+            if not val or val in ["Room", "Lab"] or "TimeTable" in val or "FSC" in val:
+                continue
+            if re.match(r'^\d{2}:\d{2}', val):
+                continue
+            fmt = cell.get('effectiveFormat', {})
+            bg = fmt.get('backgroundColor', {})
+            rgb = _normalize_color(bg)
+            if _is_color_similar(rgb, (255, 255, 255), 5):
+                continue
+            clean_name = _normalize_evening_batch_name(val)
+            if clean_name:
+                evening_legend[rgb] = clean_name
+    return evening_legend
+
 def _extract_legend(row_data: list) -> dict:
     legend_color_map = {}
     for row_idx in range(min(4, len(row_data))):
@@ -97,6 +144,7 @@ def _grid_to_dataframe(row_data: list) -> DataFrame:
         
     legend_color_map = _extract_legend(row_data)
     evening_start_col = _find_evening_start_col(row_data)
+    evening_legend_map = _extract_evening_legend(row_data, evening_start_col)
     
     table = []
     for row in row_data:
@@ -105,20 +153,26 @@ def _grid_to_dataframe(row_data: list) -> DataFrame:
         for col_idx, cell in enumerate(cells):
             val = str(cell.get('formattedValue', '')).strip()
             if val and val != "None":
-                # Only apply BS legend color mapping to daytime columns
+                fmt = cell.get('effectiveFormat', {})
+                bg = fmt.get('backgroundColor', {})
+                rgb = _normalize_color(bg)
+                
+                batch = None
                 if col_idx < evening_start_col:
-                    fmt = cell.get('effectiveFormat', {})
-                    bg = fmt.get('backgroundColor', {})
-                    rgb = _normalize_color(bg)
-                    
-                    batch = None
+                    # Daytime BS legend color matching
                     for l_rgb, b_name in legend_color_map.items():
-                        if _is_color_similar(rgb, l_rgb, 5):
+                        if _is_color_similar(rgb, l_rgb, 12):
+                            batch = b_name
+                            break
+                else:
+                    # Evening MS / PhD / Repeat legend color matching
+                    for l_rgb, b_name in evening_legend_map.items():
+                        if _is_color_similar(rgb, l_rgb, 12):
                             batch = b_name
                             break
                             
-                    if batch:
-                        val = f"{val} [{batch}]"
+                if batch:
+                    val = f"{val} [{batch}]"
             else:
                 val = ""
             row_vals.append(val)

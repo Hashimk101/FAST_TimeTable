@@ -183,7 +183,7 @@ def generate_static_data():
                 for sname, sec in t_cur.fetchall():
                     sname_clean = (sname or '').strip()
                     sec_clean = (sec or '').strip()
-                    if not sname_clean or sname_clean.lower() in {'room', 'lab', 'nil', 'none'}:
+                    if not sname_clean or sname_clean.lower() in {'room', 'lab', 'nil', 'none'} or re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', sname_clean):
                         continue
                     
                     key = sname_clean.lower()
