@@ -84,10 +84,10 @@ def generate_static_data():
 
     print("Generating static binary data files...")
 
-    # 1. Batches (Only BS batches)
+    # 1. Batches (All batches: BS, MS, PhD)
     with sqlite3.connect(SUBJECTS_DB) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, color_hex FROM batches WHERE name LIKE 'BS%' ORDER BY id ASC")
+        cursor.execute("SELECT id, name, color_hex FROM batches ORDER BY id ASC")
         batches_rows = cursor.fetchall()
         batches = [{"id": r[0], "name": r[1], "color_hex": r[2]} for r in batches_rows]
         
@@ -100,13 +100,12 @@ def generate_static_data():
         all_subjects_rows = cursor.fetchall()
         all_subjects = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in all_subjects_rows]
 
-        # Map batch_id to subjects (Only BS batches)
+        # Map batch_id to subjects
         cursor.execute("""
             SELECT b.name, s.id, s.name, s.short_name
             FROM batch_subjects bs
             JOIN batches b ON bs.batch_id = b.id
             JOIN subjects s ON bs.subject_id = s.id
-            WHERE b.name LIKE 'BS%'
             ORDER BY s.name ASC
         """)
         batch_subs_rows = cursor.fetchall()
@@ -123,10 +122,19 @@ def generate_static_data():
             f.write(encode_data(subjects_by_batch))
         print(f"Generated subjects.bin")
 
-        # 3. Electives (Empty now that MS is dropped)
+        # 3. Elective subjects (Shared MS Electives)
+        cursor.execute("""
+            SELECT DISTINCT s.id, s.name, s.short_name
+            FROM subjects s
+            JOIN batch_subjects bs ON s.id = bs.subject_id
+            JOIN batches b ON bs.batch_id = b.id
+            WHERE b.name LIKE '%Elective%'
+            ORDER BY s.name ASC
+        """)
+        electives = [{"id": r[0], "name": r[1], "short_name": r[2]} for r in cursor.fetchall()]
         with open(os.path.join(OUTPUT_DIR, 'electives.bin'), 'w') as f:
-            f.write(encode_data([]))
-        print(f"Generated electives.bin (0 electives)")
+            f.write(encode_data(electives))
+        print(f"Generated electives.bin ({len(electives)} electives)")
 
         # 4. Repeat subjects with sections
         # Source of truth: Actual schedules in uni_timetable.db and uni_timetable_lab.db
@@ -213,11 +221,20 @@ def generate_static_data():
             continue
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH LIKE 'BS%'")
+            cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH IS NOT NULL")
             for row in cursor.fetchall():
                 b, s = row[0], row[1]
                 if b:
-                    combos.add((b, s or ''))
+                    if b.startswith('MS'):
+                        combos.add((b, ''))
+                        if s:
+                            combos.add((b, s))
+                    elif b.startswith('PhD'):
+                        combos.add((b, ''))
+                        if s:
+                            combos.add((b, s))
+                    else:
+                        combos.add((b, s or ''))
 
     print(f"Processing {len(combos)} batch/section combinations for schedules...")
 
@@ -234,7 +251,34 @@ def generate_static_data():
                     continue
                 with sqlite3.connect(db_path) as conn:
                     cursor = conn.cursor()
-                    if batch_val and section_val:
+                    if str(batch_val).startswith('MS') and batch_val != 'MS Electives (All Prgrms)':
+                        # Bundle MS batch core courses AND open MS electives into the schedule binary
+                        if section_val:
+                            cursor.execute(f"""
+                                SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
+                                FROM timetable
+                                WHERE DAY = ? AND ((BATCH = ? AND (SECTION = ? OR SECTION = '' OR SECTION IS NULL)) OR BATCH = 'MS Electives (All Prgrms)')
+                            """, (day, batch_val, section_val))
+                        else:
+                            cursor.execute(f"""
+                                SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
+                                FROM timetable
+                                WHERE DAY = ? AND (BATCH = ? OR BATCH = 'MS Electives (All Prgrms)')
+                            """, (day, batch_val))
+                    elif str(batch_val).startswith('PhD'):
+                        if section_val:
+                            cursor.execute(f"""
+                                SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
+                                FROM timetable
+                                WHERE DAY = ? AND BATCH = ? AND (SECTION = ? OR SECTION = '' OR SECTION IS NULL)
+                            """, (day, batch_val, section_val))
+                        else:
+                            cursor.execute(f"""
+                                SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
+                                FROM timetable
+                                WHERE DAY = ? AND BATCH = ?
+                            """, (day, batch_val))
+                    elif batch_val and section_val:
                         cursor.execute(f"""
                             SELECT START_TIME, END_TIME, SUBJECT, {loc_col}, STATUS
                             FROM timetable
