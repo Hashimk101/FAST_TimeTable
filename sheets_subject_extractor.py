@@ -144,6 +144,9 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
 
     # Ignore list for schedule cell parsing
     ignore_keywords = {"room", "lab", "nil", "day", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "timetable"}
+    known_typos = {
+        "comp wrch": "Comp Arch"
+    }
 
     for sheet in sheets:
         sheet_title = sheet['properties']['title']
@@ -159,6 +162,10 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 if not raw_val or raw_val.lower() in ignore_keywords:
                     continue
                 
+                # Filter out evaluation / FYP bookings
+                if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', raw_val):
+                    continue
+
                 # Ignore timeslot headers
                 if re.match(r'^\d{2}:\d{2}', raw_val):
                     continue
@@ -178,6 +185,9 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
                 # Additional cleanup for multiline text or garbage
                 if '\n' in subject_name:
                     subject_name = subject_name.split('\n')[0].strip()
+
+                if subject_name.lower() in known_typos:
+                    subject_name = known_typos[subject_name.lower()]
 
                 if not subject_name or subject_name.lower() in ignore_keywords or len(subject_name) < 2:
                     continue

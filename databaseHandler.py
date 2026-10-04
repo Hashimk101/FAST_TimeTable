@@ -21,14 +21,11 @@ days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturda
 
 # database work and stuff
 def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLASSROOM'):
-    '''
-    Docstring for making the database and the timetable table
-    it only creates the table if it does not already exist but doesnt populate it
-    '''
     conn = sqlite3.connect(db_name)
     crsr = conn.cursor()
 
-    crsr.execute(f'''CREATE TABLE IF NOT EXISTS timetable (
+    crsr.execute("DROP TABLE IF EXISTS timetable")
+    crsr.execute(f'''CREATE TABLE timetable (
                 ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 DAY TEXT NOT NULL,
                 START_TIME TEXT NOT NULL,
@@ -39,15 +36,17 @@ def make_database(db_name: str = 'uni_timetable.db', location_column: str = 'CLA
                 BATCH TEXT,
                 STATUS TEXT,
 
-                UNIQUE(DAY, {location_column}, START_TIME) -- to avoid overlapping classes in the same classroom just in case the timetable is incorrect
+                UNIQUE(DAY, {location_column}, START_TIME, SECTION)
                 )
                 ''')
-    
-    crsr.execute("DELETE FROM timetable")
 
     crsr.execute(''' CREATE INDEX IF NOT EXISTS idx_day_section ON timetable (DAY, SECTION, SUBJECT) ''')
     conn.commit()
     conn.close()
+
+KNOWN_TYPOS = {
+    "comp wrch": "Comp Arch",
+}
 
 def correct_typos_in_db(db_name: str = 'uni_timetable.db'):
     import difflib
@@ -55,10 +54,15 @@ def correct_typos_in_db(db_name: str = 'uni_timetable.db'):
     conn = sqlite3.connect(db_name)
     crsr = conn.cursor()
     
+    # Apply explicit known typos first
+    for old_s, new_s in KNOWN_TYPOS.items():
+        crsr.execute("UPDATE timetable SET SUBJECT = ? WHERE LOWER(SUBJECT) = ?", (new_s, old_s.lower()))
+    
     # Get all subjects
     crsr.execute("SELECT SUBJECT FROM timetable")
     rows = crsr.fetchall()
     if not rows:
+        conn.commit()
         conn.close()
         return
         
@@ -68,6 +72,7 @@ def correct_typos_in_db(db_name: str = 'uni_timetable.db'):
     # Canonical subjects are those appearing 3 or more times
     canonical = [s for s, c in counts.items() if c >= 3]
     if not canonical:
+        conn.commit()
         conn.close()
         return
         
@@ -298,24 +303,27 @@ def is_evening_time(start_time: str) -> bool:
         return False
     return start_time in {'05:20', '06:00', '06:45'} or start_time >= '17:00'
 
-def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str = None) -> dict:
+def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str = None):
     """
     Disambiguates MS, PhD, and MS Elective classes.
     Works for:
       - Any class with is_evening_time(start_time)
+      - Any class where current_batch starts with 'MS' or 'PhD'
       - Any daytime research/PhD class containing (PCS) or (PHD)
+    Returns a dict or list of dicts with keys: subject, section, batch
     """
     is_evening = is_evening_time(start_time)
     is_phd = bool(re.search(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', subject, re.IGNORECASE))
     is_ms_keyword = bool(re.search(r'\bMS\b', subject, re.IGNORECASE))
+    has_pg_batch = bool(current_batch and (current_batch.startswith('MS') or current_batch.startswith('PhD')))
     
-    if not is_evening and not is_phd and not is_ms_keyword:
+    if not is_evening and not is_phd and not is_ms_keyword and not has_pg_batch:
         return None
 
     text = subject.strip()
 
     # 1. PhD Classes
-    if is_phd:
+    if is_phd or current_batch == "PhD (Computing)":
         phd_match = re.search(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', text, re.IGNORECASE)
         sec_code = phd_match.group(1).upper() if phd_match else "PCS"
         clean_subj = re.sub(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', '', text).strip()
@@ -344,11 +352,42 @@ def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str
     # Extract tag like (AI-A), (AI-B), (CS), (CY), (SE), (DS-A), (CI), (AIHS), (Cyber &SE)
     tag_match = re.search(r'\(([^)]+)\)', text)
     tag = tag_match.group(1).strip() if tag_match else ""
+    tag_upper = tag.upper()
     
     if tag_match:
         clean_subj = re.sub(r'\([^)]+\)', '', text).strip()
 
-    tag_upper = tag.upper()
+    # Joint Cyber & SE Research Methodology / Classes:
+    if "CYBER" in tag_upper and "SE" in tag_upper:
+        return [
+            {"subject": clean_subj, "section": "MCY-A", "batch": "MS CY"},
+            {"subject": clean_subj, "section": "MSE-A", "batch": "MS SE"}
+        ]
+
+    # If the evening cell has a definitive color batch from evening legend, honor it!
+    if current_batch == "MS Electives (All Prgrms)":
+        return {
+            "subject": clean_subj,
+            "section": "MS-A",
+            "batch": "MS Electives (All Prgrms)"
+        }
+    elif current_batch == "MS CS":
+        return {"subject": clean_subj, "section": "MCS-A", "batch": "MS CS"}
+    elif current_batch == "MS CY":
+        return {"subject": clean_subj, "section": "MCY-A", "batch": "MS CY"}
+    elif current_batch == "MS SE":
+        return {"subject": clean_subj, "section": "MSE-A", "batch": "MS SE"}
+    elif current_batch == "MS AI":
+        sec = "MAI-B" if "AI-B" in tag_upper or "MAI-B" in tag_upper else "MAI-A"
+        return {"subject": clean_subj, "section": sec, "batch": "MS AI"}
+    elif current_batch == "MS DS":
+        return {"subject": clean_subj, "section": "MDS-A", "batch": "MS DS"}
+    elif current_batch == "MS Computational Intelligence":
+        return {"subject": clean_subj, "section": "MCI-A", "batch": "MS Computational Intelligence"}
+    elif current_batch == "MS AI in Health Sciences":
+        return {"subject": clean_subj, "section": "MS-AIHS-A", "batch": "MS AI in Health Sciences"}
+
+    # Fallback to tag inspection if current_batch was not from legend color
     if tag_upper in ["CS", "MCS", "MCS-A"]:
         batch_name = "MS CS"
         sec_code = "MCS-A"
@@ -427,15 +466,19 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             r'^Tutorial\s',                # Tutorial Batch 26
             r'^EE$',                       # Standalone EE
             r'^FSM$',                      # Explicitly drop FSM
-            r'^PPIT\s*Seminar'             # Explicitly drop PPIT Seminar
+            r'^PPIT\s*Seminar',            # Explicitly drop PPIT Seminar
+            r'^FYP\b',                     # FYP / FYP Proposal / FYP Evaluations
+            r'.*Thesis\s+Evaluations?',    # Thesis Evaluations
+            r'.*Proposal\s+Redefen[cs]e',  # Proposal Redefence
+            r'.*Thesis\b',                 # Standalone Thesis reservations
         ]
-        skip_words = {'prayer', 'break', 'tutorial', 'fsm', 'ppit seminar'}
+        skip_words = {'prayer', 'break', 'tutorial', 'fsm', 'ppit seminar', 'fyp', 'thesis'}
 
         timetable_list = get_list_of_dicts_from_df(clean_df, location_col)
 
         for entry in timetable_list:
             raw_subj = entry['subject'].strip()
-            if any(re.match(p, raw_subj) for p in SKIP_PATTERNS):
+            if any(re.match(p, raw_subj, re.IGNORECASE) for p in SKIP_PATTERNS):
                 continue
             if raw_subj.lower() in skip_words:
                 continue
@@ -451,64 +494,76 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             status, entry['subject'] = extract_status(entry['subject'])
 
             # 2.5: Postgraduate (MS & PhD) Disambiguation
-            # Intercepts evening classes and daytime research/PhD classes (PCS) BEFORE tags like (CS), (SE), (PCS) are stripped
             time_slot_str = str(entry.get('time_slot', ''))
             approx_start = time_slot_str.split('-')[0].strip() if '-' in time_slot_str else time_slot_str
             pg_res = resolve_postgraduate_entry(entry['subject'], approx_start, batch)
 
+            pg_entries = []
             if pg_res:
-                entry['subject'] = pg_res['subject']
-                entry['section'] = pg_res['section']
-                batch = pg_res['batch']
+                if isinstance(pg_res, list):
+                    pg_entries = pg_res
+                else:
+                    pg_entries = [pg_res]
             else:
                 # Case 1: Time is in the text (like Civics 02:00-03:45)
                 if check_if_time_in_subject(entry['subject']):
                     subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
-                    entry['subject'] = subject
-                    entry['section'] = section
-                    entry['time_slot'] = time_slot
-
+                    pg_entries.append({
+                        'subject': subject,
+                        'section': section,
+                        'time_slot': time_slot,
+                        'batch': batch
+                    })
                 # Case 2: Time is in the header (Standard classes)
                 else:
-                    # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
                     if "Unnamed" in str(entry['time_slot']):
                         continue
-
                     subject, section = separate_subject_and_section(entry['subject'])
-                    entry['subject'] = subject
-                    entry['section'] = section
+                    pg_entries.append({
+                        'subject': subject,
+                        'section': section,
+                        'time_slot': entry['time_slot'],
+                        'batch': batch
+                    })
 
-            # Now it is safe to split
-            start_time, end_time = separate_time_slot(entry['time_slot'])
-            if not start_time or not end_time or start_time == end_time:
-                continue
-            entry['start_time'] = start_time
-            entry['end_time'] = end_time
+            for pe in pg_entries:
+                subj = pe['subject'].strip()
+                sec = pe.get('section', '').strip()
+                bth = pe.get('batch', batch)
+                t_slot = pe.get('time_slot', entry['time_slot'])
 
-            # Assign to repeat courses if no section and no batch
-            if not entry.get('section') and not batch:
-                batch = 'BS Repeat Courses'
+                # Filter out evaluation / FYP room reservations
+                if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', subj):
+                    continue
 
-            # --- SUBSECTION HANDLING ---
-            # Extract trailing 1 or 2 from sections (e.g., CS-A1 -> CS-A)
-            # Append this detail to the location (e.g., "Kybher-3 (Part 1)")
-            # This allows both subsections to appear simultaneously under "CS-A", letting students decide.
-            if entry.get('section'):
-                sub_match = re.match(r'^([A-Z/]+-[A-Z])([1-2])(\s*,.*)?$', entry['section'])
-                if sub_match:
-                    base_section = sub_match.group(1) + (sub_match.group(3) or "")
-                    subsection_id = sub_match.group(2)
-                    entry['section'] = base_section
-                    if entry.get('location'):
-                        entry['location'] = f"{entry['location']} (Part {subsection_id})"
-                    else:
-                        entry['location'] = f"(Part {subsection_id})"
+                # Normalize known typos
+                if subj.lower() in KNOWN_TYPOS:
+                    subj = KNOWN_TYPOS[subj.lower()]
 
-            # ... rest of the insertion code ...
-            crsr.execute(f'''
-                INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (day, entry['start_time'], entry['end_time'], entry['subject'], entry['location'], entry['section'], batch, status))
+                start_time, end_time = separate_time_slot(t_slot)
+                if not start_time or not end_time or start_time == end_time:
+                    continue
+
+                # Assign to repeat courses if no section and no batch
+                if not sec and not bth:
+                    bth = 'BS Repeat Courses'
+
+                loc = entry['location']
+                if sec:
+                    sub_match = re.match(r'^([A-Z/]+-[A-Z])([1-2])(\s*,.*)?$', sec)
+                    if sub_match:
+                        base_section = sub_match.group(1) + (sub_match.group(3) or "")
+                        subsection_id = sub_match.group(2)
+                        sec = base_section
+                        if loc:
+                            loc = f"{loc} (Part {subsection_id})"
+                        else:
+                            loc = f"(Part {subsection_id})"
+
+                crsr.execute(f'''
+                    INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (day, start_time, end_time, subj, loc, sec, bth, status))
 
         conn.commit()
     finally:

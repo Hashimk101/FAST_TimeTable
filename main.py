@@ -47,6 +47,10 @@ def main():
         except Exception as e:
             print(f"Error processing {day} (sheet '{actual_sheet}'): {e}")
 
+    from databaseHandler import correct_typos_in_db
+    correct_typos_in_db(COURSE_DATABASE)
+    correct_typos_in_db(LAB_DATABASE)
+
     print("\nDatabase creation complete!")
     print("- Classroom timetable: uni_timetable.db")
     print("- Lab timetable: uni_timetable_lab.db")

@@ -53,6 +53,9 @@ def rebuild_subjects_db():
 
     # --- FUZZY MATCHING SYNC ---
     # Fetch canonical, typo-corrected subjects from both theory and lab timetable databases
+    import re
+    known_typos = {"comp wrch": "Comp Arch"}
+
     canonical_subjects_set = set()
     for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
         if os.path.exists(db_file):
@@ -60,7 +63,15 @@ def rebuild_subjects_db():
                 with sqlite3.connect(db_file) as c_conn:
                     c_cursor = c_conn.cursor()
                     c_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable WHERE SUBJECT IS NOT NULL")
-                    canonical_subjects_set.update(row[0].strip() for row in c_cursor.fetchall() if row[0] and row[0].strip())
+                    for row in c_cursor.fetchall():
+                        s = (row[0] or '').strip()
+                        if not s:
+                            continue
+                        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s):
+                            continue
+                        if s.lower() in known_typos:
+                            s = known_typos[s.lower()]
+                        canonical_subjects_set.add(s)
             except Exception as e:
                 print(f"Warning: Could not read canonical subjects from {db_file}: {e}")
     canonical_subjects = list(canonical_subjects_set)
@@ -68,6 +79,10 @@ def rebuild_subjects_db():
     import difflib
     corrected_unique_subjects = {}
     for name, short in unique_subjects.items():
+        if name.lower() in known_typos:
+            name = known_typos[name.lower()]
+        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', name):
+            continue
         if name not in canonical_subjects and canonical_subjects:
             matches = difflib.get_close_matches(name, canonical_subjects, n=1, cutoff=0.85)
             if matches:
@@ -82,6 +97,10 @@ def rebuild_subjects_db():
 
     corrected_batch_subject_links = set()
     for batch_name, subject_name in batch_subject_links:
+        if subject_name.lower() in known_typos:
+            subject_name = known_typos[subject_name.lower()]
+        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', subject_name):
+            continue
         if subject_name not in canonical_subjects and canonical_subjects:
             matches = difflib.get_close_matches(subject_name, canonical_subjects, n=1, cutoff=0.85)
             if matches:
@@ -111,11 +130,16 @@ def rebuild_subjects_db():
                     for b_name, s_name in c_cursor.fetchall():
                         b_name = (b_name or '').strip()
                         s_name = (s_name or '').strip()
-                        if b_name and s_name:
-                            corrected_batch_subject_links.add((b_name, s_name))
-                            if s_name not in corrected_unique_subjects:
-                                from sheets_subject_extractor import generate_short_name
-                                corrected_unique_subjects[s_name] = generate_short_name(s_name)
+                        if not b_name or not s_name:
+                            continue
+                        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s_name):
+                            continue
+                        if s_name.lower() in known_typos:
+                            s_name = known_typos[s_name.lower()]
+                        corrected_batch_subject_links.add((b_name, s_name))
+                        if s_name not in corrected_unique_subjects:
+                            from sheets_subject_extractor import generate_short_name
+                            corrected_unique_subjects[s_name] = generate_short_name(s_name)
             except Exception as e:
                 print(f"Warning: Could not read batch-subject mappings from {db_file}: {e}")
 
