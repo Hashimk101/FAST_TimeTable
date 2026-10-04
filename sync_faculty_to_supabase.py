@@ -469,13 +469,41 @@ def translate_section_code(raw_sec: str) -> Dict[str, Any]:
         result["timetable_section"] = f"{disc}-{sec_letter}"
         return result
 
-    # 2. Graduate / MS Programs: MCS-A, MSE-A, MAI-A, etc.
+    # 2. Graduate / MS Programs: MCS-A, MSE-A, MAI-A, MCI-A, MDS-A, MCY-A, MS-AIHS-A, MS-A, etc.
+    sec_upper = sec.upper()
+    if sec_upper.startswith("MS-AIHS"):
+        result["discipline"] = "AIHS"
+        result["batch"] = "MS AI in Health Sciences"
+        result["timetable_section"] = sec
+        return result
+    elif sec_upper.startswith("MS-") or sec_upper == "MS":
+        result["discipline"] = "MS"
+        result["batch"] = "MS Electives (All Prgrms)"
+        result["timetable_section"] = sec
+        return result
+
     m_ms = re.match(r'^M([A-Z]{2,4})-([A-Z0-9]+)$', sec, re.IGNORECASE)
     if m_ms:
         ms_disc = m_ms.group(1).upper()
+        disc_map = {
+            "CS": "MS CS",
+            "SE": "MS SE",
+            "AI": "MS AI",
+            "CY": "MS CY",
+            "DS": "MS DS",
+            "CI": "MS Computational Intelligence",
+            "AIHS": "MS AI in Health Sciences",
+        }
         result["discipline"] = ms_disc
-        result["batch"] = None
-        result["timetable_section"] = "PCS" if ms_disc in ["CS", "AI", "SE", "CY"] else sec
+        result["batch"] = disc_map.get(ms_disc, f"MS {ms_disc}")
+        result["timetable_section"] = sec
+        return result
+
+    # 3. PhD Programs: PCS, PCS-A, PCS-B, PHD-A, PHD-C
+    if sec_upper.startswith("PCS") or sec_upper.startswith("PHD"):
+        result["discipline"] = "PhD"
+        result["batch"] = "PhD (Computing)"
+        result["timetable_section"] = sec
         return result
 
     return result
@@ -756,6 +784,17 @@ def compile_faculty_schedules(
                         "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                         "params": subj_params
                     })
+
+                    # 5b. Fallback for Graduate / MS / PhD Programs (dedicated batch, elective pools, or open graduate slots)
+                    if b_name.startswith("MS") or b_name.startswith("PhD"):
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                            "params": (sec_name, f"%{sec_name}%") + subj_params
+                        })
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND {subj_cond}",
+                            "params": subj_params
+                        })
 
                 # 6. Final Fallback (Ignore batch completely with section)
                 queries_to_try.append({
@@ -1067,6 +1106,17 @@ def sync_from_existing_database(
                         "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                         "params": subj_params
                     })
+
+                    # Fallback for Graduate / MS / PhD Programs
+                    if b_name and (b_name.startswith("MS") or b_name.startswith("PhD")):
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                            "params": (sec_name, f"%{sec_name}%") + subj_params
+                        })
+                        queries_to_try.append({
+                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND {subj_cond}",
+                            "params": subj_params
+                        })
 
                 queries_to_try.append({
                     "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
