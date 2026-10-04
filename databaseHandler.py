@@ -293,6 +293,116 @@ def separate_time_slot(time_slot: str) -> tuple:
         return parts[0].strip(), parts[1].strip()
     return time_slot, time_slot
 
+def is_evening_time(start_time: str) -> bool:
+    if not start_time:
+        return False
+    return start_time in {'05:20', '06:00', '06:45'} or start_time >= '17:00'
+
+def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str = None) -> dict:
+    """
+    Disambiguates MS, PhD, and MS Elective classes.
+    Works for:
+      - Any class with is_evening_time(start_time)
+      - Any daytime research/PhD class containing (PCS) or (PHD)
+    """
+    is_evening = is_evening_time(start_time)
+    is_phd = bool(re.search(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', subject, re.IGNORECASE))
+    is_ms_keyword = bool(re.search(r'\bMS\b', subject, re.IGNORECASE))
+    
+    if not is_evening and not is_phd and not is_ms_keyword:
+        return None
+
+    text = subject.strip()
+
+    # 1. PhD Classes
+    if is_phd:
+        phd_match = re.search(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', text, re.IGNORECASE)
+        sec_code = phd_match.group(1).upper() if phd_match else "PCS"
+        clean_subj = re.sub(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', '', text).strip()
+        clean_subj = re.sub(r'\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}.*$', '', clean_subj).strip()
+        return {
+            "subject": clean_subj,
+            "section": sec_code,
+            "batch": "PhD (Computing)"
+        }
+
+    # 2. Extract discipline tag inside parentheses
+    clean_subj = text
+    sec_code = ""
+    batch_name = None
+
+    # Handle UHQ multi-batch evening announcements
+    if "UHQ" in text:
+        clean_subj = "UHQ-I & II"
+        if "PHD" in text.upper():
+            return {"subject": "UHQ-I & II", "section": "PHD", "batch": "PhD (Computing)"}
+        elif "CY" in text.upper():
+            return {"subject": "UHQ-I & II", "section": "MCY-A", "batch": "MS CY"}
+        else:
+            return {"subject": "UHQ-I & II", "section": "MS-A", "batch": "MS Electives (All Prgrms)"}
+
+    # Extract tag like (AI-A), (AI-B), (CS), (CY), (SE), (DS-A), (CI), (AIHS), (Cyber &SE)
+    tag_match = re.search(r'\(([^)]+)\)', text)
+    tag = tag_match.group(1).strip() if tag_match else ""
+    
+    if tag_match:
+        clean_subj = re.sub(r'\([^)]+\)', '', text).strip()
+
+    tag_upper = tag.upper()
+    if tag_upper in ["CS", "MCS", "MCS-A"]:
+        batch_name = "MS CS"
+        sec_code = "MCS-A"
+    elif tag_upper in ["CY", "MCY", "MCY-A"]:
+        batch_name = "MS CY"
+        sec_code = "MCY-A"
+    elif tag_upper in ["SE", "MSE", "MSE-A"]:
+        batch_name = "MS SE"
+        sec_code = "MSE-A"
+    elif tag_upper in ["AI", "MAI", "MAI-A", "AI-A"]:
+        batch_name = "MS AI"
+        sec_code = "MAI-A"
+    elif tag_upper in ["AI-B", "MAI-B"]:
+        batch_name = "MS AI"
+        sec_code = "MAI-B"
+    elif tag_upper in ["DS", "MDS", "MDS-A", "DS-A"]:
+        batch_name = "MS DS"
+        sec_code = "MDS-A"
+    elif tag_upper in ["CI", "MCI", "MCI-A"]:
+        batch_name = "MS Computational Intelligence"
+        sec_code = "MCI-A"
+    elif tag_upper in ["AIHS", "MS-AIHS", "MS-AIHS-A"]:
+        batch_name = "MS AI in Health Sciences"
+        sec_code = "MS-AIHS-A"
+    elif "CYBER" in tag_upper or "SE" in tag_upper or "&" in tag_upper:
+        batch_name = "MS Electives (All Prgrms)"
+        sec_code = "MS-A"
+
+    # Known open-pool electives or courses without discipline tag
+    elective_titles = {
+        "data visualization", "securing cloud", "empirical s/w engg",
+        "engg ai", "adv topics in gen ai", "ml", "adv topics in req engg",
+        "reserved for adv comp vision"
+    }
+
+    clean_subj_lower = clean_subj.lower().strip()
+    if not batch_name:
+        for et in elective_titles:
+            if et in clean_subj_lower:
+                batch_name = "MS Electives (All Prgrms)"
+                sec_code = "MS-A"
+                break
+
+    # If still not resolved, check Course Allocation mapping
+    if not batch_name and is_evening:
+        batch_name = "MS Electives (All Prgrms)"
+        sec_code = "MS-A"
+
+    return {
+        "subject": clean_subj,
+        "section": sec_code,
+        "batch": batch_name
+    }
+
 def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetable.db',
                      location_col: str = 'Room', db_location_col: str = 'CLASSROOM') -> None:
     conn = sqlite3.connect(db_name)
@@ -339,22 +449,34 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
 
             # 2. Extract Rescheduled/Cancelled/Reserved/Postponed status now that [batch] tag is removed
             status, entry['subject'] = extract_status(entry['subject'])
-            # Case 1: Time is in the text (like Civics 02:00-03:45)
-            if check_if_time_in_subject(entry['subject']):
-                subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
-                entry['subject'] = subject
-                entry['section'] = section
-                entry['time_slot'] = time_slot
 
-            # Case 2: Time is in the header (Standard classes)
+            # 2.5: Postgraduate (MS & PhD) Disambiguation
+            # Intercepts evening classes and daytime research/PhD classes (PCS) BEFORE tags like (CS), (SE), (PCS) are stripped
+            time_slot_str = str(entry.get('time_slot', ''))
+            approx_start = time_slot_str.split('-')[0].strip() if '-' in time_slot_str else time_slot_str
+            pg_res = resolve_postgraduate_entry(entry['subject'], approx_start, batch)
+
+            if pg_res:
+                entry['subject'] = pg_res['subject']
+                entry['section'] = pg_res['section']
+                batch = pg_res['batch']
             else:
-                # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
-                if "Unnamed" in str(entry['time_slot']):
-                    continue
+                # Case 1: Time is in the text (like Civics 02:00-03:45)
+                if check_if_time_in_subject(entry['subject']):
+                    subject, section, time_slot = separate_time_and_section_from_subject(entry['subject'])
+                    entry['subject'] = subject
+                    entry['section'] = section
+                    entry['time_slot'] = time_slot
 
-                subject, section = separate_subject_and_section(entry['subject'])
-                entry['subject'] = subject
-                entry['section'] = section
+                # Case 2: Time is in the header (Standard classes)
+                else:
+                    # SAFETY CHECK: If we somehow got here with an Unnamed header, skip to avoid crash
+                    if "Unnamed" in str(entry['time_slot']):
+                        continue
+
+                    subject, section = separate_subject_and_section(entry['subject'])
+                    entry['subject'] = subject
+                    entry['section'] = section
 
             # Now it is safe to split
             start_time, end_time = separate_time_slot(entry['time_slot'])
