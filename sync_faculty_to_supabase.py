@@ -64,6 +64,8 @@ KNOWN_FACULTY_ALIASES = {
     "jawad hasan": "jawad.hassan@nu.edu.pk",
     "jawad hassan": "jawad.hassan@nu.edu.pk",
     "zirva": "zirva.shabbir@isb.nu.edu.pk",
+    "zirva shabbir": "zirva.shabbir@isb.nu.edu.pk",
+    "zirwa": "zirva.shabbir@isb.nu.edu.pk",
     "gul e zahra": "gul.zahra@isb.nu.edu.pk",
     "m ajmal": "muhammad.ajmal@nu.edu.pk",
     "m umer": "muhammad.umer@isb.nu.edu.pk",
@@ -76,7 +78,65 @@ KNOWN_FACULTY_ALIASES = {
     "hamda": "hamda.khan@nu.edu.pk",
     "momal": "momal.saleem@nu.edu.pk",
     "khubab": "khubab.ahmed@isb.nu.edu.pk",
+    "ahsan": "ahsan.shakeel@isb.nu.edu.pk",
+    "areej": "areej.fatima@isb.nu.edu.pk",
+    "areej fatima": "areej.fatima@isb.nu.edu.pk",
+    "rubab": "rubab.zainab@isb.nu.edu.pk",
+    "hafsa": "hafsa.waheed@isb.nu.edu.pk",
+    "dilnawaz": "dilnawaz.khan@isb.nu.edu.pk",
+    "saqib": "muhammad.saqib@isb.nu.edu.pk",
+    "waqar": "nawfal.waqar@isb.nu.edu.pk",
+    "nawafal waqar": "nawfal.waqar@isb.nu.edu.pk",
+    "afaf": "afaf.ahmad@isb.nu.edu.pk",
     "sehrish hassan shigri": "sehrish.hassan@nu.edu.pk",
+}
+
+CANONICAL_FALLBACK_NAMES = {
+    "mr. ahsan": "Mr. Ahsan Shakeel Malik",
+    "ahsan": "Mr. Ahsan Shakeel Malik",
+    "mr. khubab": "Mr. Khubab Ahmed",
+    "khubab": "Mr. Khubab Ahmed",
+    "ms. hafsa": "Ms. Hafsa Waheed",
+    "hafsa": "Ms. Hafsa Waheed",
+    "ms. rubab": "Ms. Syeda Rubab Zainab",
+    "rubab": "Ms. Syeda Rubab Zainab",
+    "ms. areej": "Ms. Areej Fatima",
+    "areej": "Ms. Areej Fatima",
+    "mr. saqib": "Mr. Muhammad Saqib",
+    "saqib": "Mr. Muhammad Saqib",
+    "mr. waqar": "Mr. Nawfal Waqar",
+    "waqar": "Mr. Nawfal Waqar",
+    "mr. dilnawaz": "Dr. Dilnawaz Khan",
+    "dilnawaz": "Dr. Dilnawaz Khan",
+    "mr. faisal": "Mr. Shah Faisal",
+    "faisal": "Mr. Shah Faisal",
+    "mr. afaf": "Ms. Afaf Ahmad",
+    "afaf": "Ms. Afaf Ahmad",
+    "mr. m.umer": "Mr. Muhammad Umer",
+    "m.umer": "Mr. Muhammad Umer",
+    "mumer": "Mr. Muhammad Umer",
+    "mr ibrahim": "Dr. Muhammad Ibrahim",
+    "ibrahim": "Dr. Muhammad Ibrahim",
+    "dr usman": "Dr. Usman Habib",
+    "usman": "Dr. Usman Habib",
+    "ms momal": "Ms. Momal Saleem",
+    "momal": "Ms. Momal Saleem",
+    "dr hamda": "Dr. Hamda Khan",
+    "hamda": "Dr. Hamda Khan",
+    "dr mahboobullah": "Dr. Mahboobullah",
+    "mahboobullah": "Dr. Mahboobullah",
+    "ms. mahnoor": "Ms. Sayeda Mahnoor Ali",
+    "mahnoor": "Ms. Sayeda Mahnoor Ali",
+    "ms. maimoona": "Dr. Maimoona Rasool",
+    "maimoona": "Dr. Maimoona Rasool",
+    "ms. nimra": "Ms. Nimra Shahid",
+    "nimra": "Ms. Nimra Shahid",
+    "ms. zareen": "Ms. Aseefa Zareen",
+    "zareen": "Ms. Aseefa Zareen",
+    "aisha": "Ms. Aisha Ijaz",
+    "ghalia": "Ms. Ghalia Gohar",
+    "zirwa": "Ms. Zirva Shabbir",
+    "zirva": "Ms. Zirva Shabbir"
 }
 
 # Instructors in allocation sheet who are distinct visiting/different individuals despite sharing a surname
@@ -655,14 +715,19 @@ def compile_faculty_schedules(
         if not match:
             unmatched_instructors.add(instr_name)
             # Create synthetic fallback record for visiting/external instructors
-            clean_handle = re.sub(r'[^a-z0-9]', '.', normalize_person_name(instr_name)[0])
+            clean_name_key = instr_name.lower().strip()
+            canonical_name = CANONICAL_FALLBACK_NAMES.get(clean_name_key, instr_name)
+            clean_handle = re.sub(r'[^a-z0-9]', '.', normalize_person_name(canonical_name)[0])
             match = {
-                "name": instr_name,
+                "name": canonical_name,
                 "email": f"{clean_handle}@nu.edu.pk",
                 "dept": alloc["sheet"],
                 "desig": "Instructor",
                 "office": ""
             }
+
+        if match and match.get("name"):
+            match["name"] = CANONICAL_FALLBACK_NAMES.get(match["name"].lower().strip(), match["name"])
 
         email = match["email"].lower().strip()
         if email not in faculty_allocations:
