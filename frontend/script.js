@@ -660,6 +660,7 @@ async function buildTimetableFromConfig(config, versionId = '') {
     const cosecSlug = sanitizeSlug(cosec);
 
     const mergedTimetable = [[], [], [], [], [], []];
+    let anyDataLoaded = false;
 
     // 1. Fetch primary section schedule
     let primaryData = null;
@@ -681,6 +682,7 @@ async function buildTimetableFromConfig(config, versionId = '') {
     }
 
     if (primaryData && Array.isArray(primaryData)) {
+        anyDataLoaded = true;
         for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
             const dayClasses = primaryData[dayIdx] || [];
             const filtered = dayClasses.filter(c => subjects.includes(c.subject) || names.includes(c.subject));
@@ -699,6 +701,7 @@ async function buildTimetableFromConfig(config, versionId = '') {
         const rcData = await fetchDecoded(`/data/schedules/${repeatFileName}`, versionId);
 
         if (rcData && Array.isArray(rcData)) {
+            anyDataLoaded = true;
             for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
                 const dayClasses = rcData[dayIdx] || [];
                 const filtered = dayClasses.filter(c => c.subject === rc.subject || c.subject === rc.name);
@@ -706,6 +709,11 @@ async function buildTimetableFromConfig(config, versionId = '') {
             }
         }
     }
+
+    // If no schedule files could be loaded at all (e.g. offline and this config
+    // was never cached), return null so the caller can fall back gracefully
+    // instead of rendering/saving an empty timetable.
+    if (!anyDataLoaded) return null;
 
     // 3. Sort each day's entries by start time
     for (let dayIdx = 0; dayIdx < 6; dayIdx++) {
@@ -904,7 +912,10 @@ form.addEventListener('submit', async (e) => {
             step1.classList.add('active-step');
             
         } else {
-            showToast('Failed to generate timetable data.');
+            const offlineMsg = !navigator.onLine
+                ? "This schedule isn't available offline. Connect to the internet to load it first."
+                : 'Failed to generate timetable data.';
+            showToast(offlineMsg);
             if (typeof hideMobileSkeleton === 'function') hideMobileSkeleton();
         }
     } catch (error) {
