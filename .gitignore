@@ -48,10 +48,15 @@ MIGRATION_AUTO_SYNC_POSTMORTEM.md
 *.xls
 Course Allocation*
 
-# Scratch & temporary analysis files
+# Scratch, debug & temporary analysis files
 scratch/
-check_df.py
-check_room_headers.py
-check_similar.py
-fast_nuces.db
+debug*.py
+check_*.py
 preview_menu.html
+some.html
+
+# Dummy / unused local SQLite databases
+database.db
+timetable.db
+uni.db
+fast_nuces.db
