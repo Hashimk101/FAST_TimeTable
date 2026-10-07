@@ -56,7 +56,7 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       })
       .catch(async () => {
-        const cachedResponse = await caches.match(event.request);
+        const cachedResponse = await caches.match(event.request, { ignoreSearch: true });
         if (cachedResponse) {
           return cachedResponse;
         }
