@@ -780,13 +780,13 @@ def compile_faculty_schedules(
         total_credit_hours = 0.0
 
         for alloc in allocs:
-            c_code = alloc["course_code"]
-            c_title = alloc["course_title"]
-            chs = alloc["credit_hours"]
-            b_name = alloc["batch"]
-            sec_name = alloc["timetable_section"]
-            canonical_subj = alloc["canonical_subject"]
-            is_lab = alloc["is_lab"]
+            c_code = alloc.get("course_code") or ""
+            c_title = alloc.get("course_title") or ""
+            chs = alloc.get("credit_hours") or 0.0
+            b_name = alloc.get("batch") or ""
+            sec_name = str(alloc.get("timetable_section") or "").strip()
+            canonical_subj = str(alloc.get("canonical_subject") or "").strip()
+            is_lab = bool(alloc.get("is_lab", False))
 
             c_key = f"{c_code}_{canonical_subj}"
             if c_key not in unique_courses_map:
@@ -799,11 +799,12 @@ def compile_faculty_schedules(
                     "sections": set()
                 }
                 total_credit_hours += chs
-            unique_courses_map[c_key]["sections"].add(sec_name)
+            if sec_name:
+                unique_courses_map[c_key]["sections"].add(sec_name)
 
-            base_subj = canonical_subj.replace(" Lab", "").strip()
-            disc = sec_name.split("-")[0] if "-" in sec_name else ""
-            letter = sec_name.split("-")[1] if "-" in sec_name else ""
+            base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+            disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
+            letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
             cursors_to_try = [
                 (cur_lab, "LAB", True),
@@ -1054,7 +1055,8 @@ def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str):
 def sync_from_existing_database(
     db_url: str,
     theory_db: str = THEORY_DB_PATH,
-    lab_db: str = LAB_DB_PATH
+    lab_db: str = LAB_DB_PATH,
+    dry_run: bool = False
 ):
     """
     Continuous synchronization mode when Course Allocation Excel sheet is absent.
@@ -1106,35 +1108,72 @@ def sync_from_existing_database(
         email = row["email"]
         existing_schedule = row["schedule"] or {}
         
-        # Extract unique classes assigned to this teacher from their existing schedule
+        # 1. Preserve top-level metadata keys (e.g. custom_activities list, slot_overrides)
+        extra_keys = {
+            k: v for k, v in existing_schedule.items()
+            if k not in DAYS_OF_WEEK
+        }
+
+        # 2. Extract custom activities from day arrays (Office hours, FYP, meetings, etc.)
+        custom_day_activities = {day: [] for day in DAYS_OF_WEEK}
         assigned_classes = {}
-        for day, slots in existing_schedule.items():
+
+        for day in DAYS_OF_WEEK:
+            slots = existing_schedule.get(day, [])
+            if not isinstance(slots, list):
+                continue
             for s in slots:
-                key = (s.get("batch"), s.get("section"), s.get("subject"), s.get("is_lab", False))
+                if not isinstance(s, dict):
+                    continue
+
+                # Check if it is a custom academic activity
+                is_custom = (
+                    s.get("isCustom") is True
+                    or bool(s.get("customCategory"))
+                    or str(s.get("id", "")).startswith("act")
+                )
+
+                if is_custom:
+                    custom_day_activities[day].append(s)
+                    continue
+
+                # Official university course
+                s_batch = s.get("batch") or ""
+                s_sec = str(s.get("section") or "").strip()
+                s_subj = str(s.get("subject") or "").strip()
+                s_lab = bool(s.get("is_lab", False))
+
+                if not s_subj:
+                    continue
+
+                key = (s_batch, s_sec, s_subj, s_lab)
                 if key not in assigned_classes:
                     assigned_classes[key] = {
-                        "batch": s.get("batch"),
-                        "section": s.get("section"),
-                        "subject": s.get("subject"),
-                        "is_lab": s.get("is_lab", False),
-                        "course_code": s.get("course_code", ""),
-                        "course_name": s.get("course_name", "")
+                        "batch": s_batch,
+                        "section": s_sec,
+                        "subject": s_subj,
+                        "is_lab": s_lab,
+                        "course_code": s.get("course_code", "") or "",
+                        "course_name": s.get("course_name", "") or ""
                     }
 
         weekly_schedule = {day: [] for day in DAYS_OF_WEEK}
         total_slots = 0
 
         for key, cls_info in assigned_classes.items():
-            b_name = cls_info["batch"]
-            sec_name = cls_info["section"]
-            canonical_subj = cls_info["subject"]
-            is_lab = cls_info["is_lab"]
-            c_code = cls_info["course_code"]
-            c_title = cls_info["course_name"]
+            b_name = cls_info.get("batch") or ""
+            sec_name = str(cls_info.get("section") or "").strip()
+            canonical_subj = str(cls_info.get("subject") or "").strip()
+            is_lab = bool(cls_info.get("is_lab", False))
+            c_code = cls_info.get("course_code") or ""
+            c_title = cls_info.get("course_name") or ""
 
-            base_subj = canonical_subj.replace(" Lab", "").strip()
-            disc = sec_name.split("-")[0] if "-" in sec_name else ""
-            letter = sec_name.split("-")[1] if "-" in sec_name else ""
+            if not canonical_subj:
+                continue
+
+            base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+            disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
+            letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
             cursors_to_try = [
                 (cur_lab, "LAB", True),
@@ -1229,8 +1268,17 @@ def sync_from_existing_database(
                         weekly_schedule[m_day].append(slot_entry)
                         total_slots += 1
 
+        # 3. Merge custom activities back in and sort
         for day in DAYS_OF_WEEK:
-            weekly_schedule[day].sort(key=lambda s: parse_time_minutes(s["start_time"]))
+            for custom_act in custom_day_activities[day]:
+                if custom_act not in weekly_schedule[day]:
+                    weekly_schedule[day].append(custom_act)
+                    total_slots += 1
+            weekly_schedule[day].sort(key=lambda s: parse_time_minutes(str(s.get("start_time") or "00:00")))
+
+        # 4. Re-attach extra metadata (e.g. custom_activities list, slot_overrides)
+        for k, v in extra_keys.items():
+            weekly_schedule[k] = v
 
         schedule_canonical_str = json.dumps(weekly_schedule, sort_keys=True)
         new_hash = hashlib.sha256(schedule_canonical_str.encode("utf-8")).hexdigest()
@@ -1250,6 +1298,10 @@ def sync_from_existing_database(
 
     conn_theory.close()
     conn_lab.close()
+
+    if dry_run:
+        print(f"\n[DRY RUN] Successfully processed {len(updated_records)} faculty profiles from Supabase.")
+        return
 
     upsert_via_psycopg2(updated_records, db_url)
 
@@ -1307,7 +1359,7 @@ def main():
         if not db_url:
             print("[ERROR] DATABASE_URL not set. Continuous sync requires Supabase connection.")
             sys.exit(1)
-        sync_from_existing_database(db_url)
+        sync_from_existing_database(db_url, dry_run=args.dry_run)
 
 if __name__ == "__main__":
     main()
