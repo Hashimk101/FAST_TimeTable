@@ -482,19 +482,31 @@ def find_faculty_match(
 # 2. SECTION TRANSLATOR & CANONICAL SUBJECT RESOLVER
 # =============================================================================
 
-def translate_section_code(raw_sec: str) -> Dict[str, Any]:
+def translate_section_code(raw_sec: str, year: int = 2026, season: str = "fall") -> Dict[str, Any]:
     """
-    Translates an Excel section code using the Fall 2026 formula:
-    Batch Year = 26 - ((Semester - 1) // 2)
+    Translates course allocation Excel section codes into timetable section codes
+    and maps them to the appropriate student batch.
+
+    Dynamic Batch Algebra:
+      - Fall: Base year beta = year % 100 (e.g. Fall 2026 -> 26)
+      - Spring / Summer: Base year beta = (year % 100) - 1 (e.g. Spring 2027 -> 26)
+      - Batch Year = beta - ((semester - 1) // 2)
 
     Examples:
-      BCS-1A  -> Batch: 'BS 26 CS', Section: 'CS-A'
-      BAI-3B  -> Batch: 'BS 25 AI', Section: 'AI-B'
-      BSE-5C  -> Batch: 'BS 24 SE', Section: 'SE-C'
-      BCY-7A  -> Batch: 'BS 23 CY', Section: 'CY-A'
-      BCS-1A1 -> Batch: 'BS 26 CS', Section: 'CS-A' (Lab group 1 stripped)
-      BSR-7A  -> Batch: 'BS 23 CS', Section: 'CS-Robo'
-      BCS-9A  -> Batch: 'BS Repeat Courses', Section: 'CS-A'
+      Fall 2026:
+        BCS-1A  -> Batch: 'BS 26 CS', Section: 'CS-A'
+        BAI-3B  -> Batch: 'BS 25 AI', Section: 'AI-B'
+        BSE-5C  -> Batch: 'BS 24 SE', Section: 'SE-C'
+        BCY-7A  -> Batch: 'BS 23 CY', Section: 'CY-A'
+      Spring 2027:
+        BCS-2A  -> Batch: 'BS 26 CS', Section: 'CS-A'
+        BAI-4B  -> Batch: 'BS 25 AI', Section: 'AI-B'
+        BSE-6C  -> Batch: 'BS 24 SE', Section: 'SE-C'
+        BCY-8A  -> Batch: 'BS 23 CY', Section: 'CY-A'
+      Repeats and special cases:
+        BCS-1A1 -> Batch: 'BS 26 CS', Section: 'CS-A' (Lab group 1 stripped)
+        BSR-7A  -> Batch: 'BS 23 CS', Section: 'CS-Robo'
+        BCS-9A  -> Batch: 'BS Repeat Courses', Section: 'CS-A'
     """
     sec = str(raw_sec).strip()
     result = {
@@ -513,7 +525,9 @@ def translate_section_code(raw_sec: str) -> Dict[str, Any]:
         sem = int(m_bs.group(2))
         sec_letter = m_bs.group(3).upper()
         
-        batch_year = 26 - ((sem - 1) // 2)
+        season_lower = (season or "fall").lower().strip()
+        base_year = (year % 100) if season_lower == "fall" else ((year % 100) - 1)
+        batch_year = base_year - ((sem - 1) // 2)
         
         result["is_undergraduate"] = True
         result["semester"] = sem
@@ -610,7 +624,7 @@ def resolve_canonical_subject(course_title: str, course_code: str = "", is_lab: 
 # 3. EXCEL ALLOCATION INGESTION (FORWARD-FILLING MERGED CELLS)
 # =============================================================================
 
-def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH) -> List[Dict[str, Any]]:
+def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH, year: int = 2026, season: str = "fall") -> List[Dict[str, Any]]:
     """
     Parses all 4 sheets in the Course Allocation workbook:
     - 'Computing-Theory', 'Computing-Labs', 'S&H', 'MG'
@@ -677,7 +691,7 @@ def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH) -> List[Dict[s
             if instr_str.lower() in IGNORED_INSTRUCTORS or sec_str.lower() in {"section", "nil"}:
                 continue
 
-            sec_info = translate_section_code(sec_str)
+            sec_info = translate_section_code(sec_str, year=year, season=season)
             course_is_lab = is_lab or "lab" in curr_course.lower()
             canonical_subj = resolve_canonical_subject(curr_course, curr_code, is_lab=course_is_lab)
 
@@ -706,7 +720,8 @@ def compile_faculty_schedules(
     allocations: List[Dict[str, Any]], 
     faculty_roster: List[Dict[str, Any]],
     theory_db: str = THEORY_DB_PATH,
-    lab_db: str = LAB_DB_PATH
+    lab_db: str = LAB_DB_PATH,
+    semester_id: str = "2026-fall"
 ) -> List[Dict[str, Any]]:
     """
     Joins allocations with SQLite timetable databases and compiles weekly schedule JSON.
@@ -952,6 +967,7 @@ def compile_faculty_schedules(
 
         compiled_records.append({
             "email": email,
+            "semester_id": semester_id,
             "name": fac_info.get("name", ""),
             "designation": fac_info.get("desig", ""),
             "department": fac_info.get("dept", ""),
@@ -973,7 +989,7 @@ def compile_faculty_schedules(
 # 5. ATOMIC UPSERT ENGINE (POSTGRESQL OR REST FALLBACK)
 # =============================================================================
 
-def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str):
+def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str, semester_id: str = "2026-fall"):
     """Atomic upsert via PostgreSQL connection pooler."""
     conn = psycopg2.connect(database_url)
     conn.autocommit = False
@@ -983,16 +999,16 @@ def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str):
 
     upsert_query = """
         INSERT INTO public.faculty_schedules (
-            email, name, designation, department, office,
+            email, semester_id, name, designation, department, office,
             schedule, courses, total_weekly_slots, total_credit_hours,
             schedule_hash, version
         )
         VALUES (
-            %(email)s, %(name)s, %(designation)s, %(department)s, %(office)s,
+            %(email)s, %(semester_id)s, %(name)s, %(designation)s, %(department)s, %(office)s,
             %(schedule)s, %(courses)s, %(total_weekly_slots)s, %(total_credit_hours)s,
             %(schedule_hash)s, 1
         )
-        ON CONFLICT (email) DO UPDATE SET
+        ON CONFLICT (email, semester_id) DO UPDATE SET
             name = EXCLUDED.name,
             designation = EXCLUDED.designation,
             department = EXCLUDED.department,
@@ -1017,6 +1033,7 @@ def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str):
         for rec in records:
             params = {
                 "email": rec["email"],
+                "semester_id": rec.get("semester_id", semester_id),
                 "name": rec["name"],
                 "designation": rec["designation"],
                 "department": rec["department"],
@@ -1056,13 +1073,14 @@ def sync_from_existing_database(
     db_url: str,
     theory_db: str = THEORY_DB_PATH,
     lab_db: str = LAB_DB_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    semester_id: str = "2026-fall"
 ):
     """
     Continuous synchronization mode when Course Allocation Excel sheet is absent.
-    Reads existing faculty records from Supabase, re-queries uni_timetable.db and
-    uni_timetable_lab.db for each teacher's assigned classes, and updates Supabase
-    only if room/timing changes occur.
+    Reads existing faculty records from Supabase for the specified semester_id,
+    re-queries uni_timetable.db and uni_timetable_lab.db for each teacher's assigned classes,
+    and updates Supabase only if room/timing changes occur.
     """
     if not HAS_PSYCOPG2:
         sys.exit("[ERROR] psycopg2 is required for database sync. Run: pip install psycopg2-binary")
@@ -1071,18 +1089,19 @@ def sync_from_existing_database(
     cur_db = conn_db.cursor(cursor_factory=RealDictCursor)
     
     cur_db.execute("""
-        SELECT email, name, designation, department, office, schedule, courses, schedule_hash, version, total_credit_hours
+        SELECT email, semester_id, name, designation, department, office, schedule, courses, schedule_hash, version, total_credit_hours
         FROM faculty_schedules
-    """)
+        WHERE semester_id = %s
+    """, (semester_id,))
     rows = cur_db.fetchall()
     cur_db.close()
     conn_db.close()
 
     if not rows:
-        print("[WARN] No existing faculty profiles found in Supabase.")
+        print(f"[WARN] No existing faculty profiles found in Supabase for semester '{semester_id}'.")
         return
 
-    print(f"Loaded {len(rows)} faculty profiles from Supabase for continuous synchronization.")
+    print(f"Loaded {len(rows)} faculty profiles from Supabase for semester '{semester_id}' continuous synchronization.")
 
     conn_theory = sqlite3.connect(theory_db)
     conn_theory.row_factory = sqlite3.Row
@@ -1285,6 +1304,7 @@ def sync_from_existing_database(
 
         updated_records.append({
             "email": email,
+            "semester_id": row.get("semester_id", semester_id),
             "name": row["name"],
             "designation": row["designation"],
             "department": row["department"],
@@ -1300,10 +1320,10 @@ def sync_from_existing_database(
     conn_lab.close()
 
     if dry_run:
-        print(f"\n[DRY RUN] Successfully processed {len(updated_records)} faculty profiles from Supabase.")
+        print(f"\n[DRY RUN] Successfully processed {len(updated_records)} faculty profiles from Supabase for semester '{semester_id}'.")
         return
 
-    upsert_via_psycopg2(updated_records, db_url)
+    upsert_via_psycopg2(updated_records, db_url, semester_id=semester_id)
 
 # =============================================================================
 # 7. MAIN EXECUTION
@@ -1311,9 +1331,16 @@ def sync_from_existing_database(
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="FAST Faculty Timetable Ingestion Pipeline")
+    parser = argparse.ArgumentParser(description="FAST Faculty Timetable Ingestion Pipeline (Multi-Semester)")
     parser.add_argument("--dry-run", action="store_true", help="Compile schedules without uploading to database")
+    parser.add_argument("--year", type=int, default=2026, help="Academic year (e.g. 2026, 2027)")
+    parser.add_argument("--season", choices=["fall", "spring", "summer"], default="fall", help="Semester season")
+    parser.add_argument("--semester-id", type=str, default=None, help="Explicit semester slug (e.g. 2026-fall, 2027-spring)")
+    parser.add_argument("--excel", type=str, default=DEFAULT_EXCEL_PATH, help="Path to Course Allocation Excel workbook")
     args = parser.parse_args()
+
+    semester_id = args.semester_id or f"{args.year}-{args.season.lower()}"
+    excel_path = args.excel
 
     # Load DATABASE_URL from .env if present
     db_url = os.environ.get("DATABASE_URL")
@@ -1325,20 +1352,22 @@ def main():
                     break
 
     print("=== FAST Faculty Timetable Ingestion Pipeline ===")
+    print(f"Target Semester: {semester_id} (Year: {args.year}, Season: {args.season})")
     
-    excel_exists = os.path.exists(DEFAULT_EXCEL_PATH)
+    excel_exists = os.path.exists(excel_path)
     
     if excel_exists:
-        print(f"[MODE] Found '{DEFAULT_EXCEL_PATH}'. Performing full allocation ingestion.")
+        print(f"[MODE] Found '{excel_path}'. Performing full allocation ingestion.")
         faculty_roster = decode_faculty_bin()
-        allocations = read_course_allocations()
-        records = compile_faculty_schedules(allocations, faculty_roster)
+        allocations = read_course_allocations(excel_path=excel_path, year=args.year, season=args.season)
+        records = compile_faculty_schedules(allocations, faculty_roster, semester_id=semester_id)
 
         if args.dry_run:
-            print(f"\n[DRY RUN] Compiled {len(records)} faculty schedules successfully!")
+            print(f"\n[DRY RUN] Compiled {len(records)} faculty schedules successfully for '{semester_id}'!")
             if records:
                 sample = records[0]
                 print(f"\nSample Teacher: {sample['name']} ({sample['email']})")
+                print(f"Semester: {sample['semester_id']}")
                 print(f"Department: {sample['department']}")
                 print(f"Weekly Slots: {sample['total_weekly_slots']}")
                 print(f"Credit Hours: {sample['total_credit_hours']}")
@@ -1350,16 +1379,16 @@ def main():
             sys.exit(1)
 
         if HAS_PSYCOPG2:
-            upsert_via_psycopg2(records, db_url)
+            upsert_via_psycopg2(records, db_url, semester_id=semester_id)
         else:
             print("[ERROR] psycopg2 is required for database sync. Please run: pip install psycopg2-binary")
             sys.exit(1)
     else:
-        print(f"[MODE] '{DEFAULT_EXCEL_PATH}' not present. Performing continuous timetable synchronization from Supabase.")
+        print(f"[MODE] '{excel_path}' not present. Performing continuous timetable synchronization from Supabase.")
         if not db_url:
             print("[ERROR] DATABASE_URL not set. Continuous sync requires Supabase connection.")
             sys.exit(1)
-        sync_from_existing_database(db_url, dry_run=args.dry_run)
+        sync_from_existing_database(db_url, dry_run=args.dry_run, semester_id=semester_id)
 
 if __name__ == "__main__":
     main()
