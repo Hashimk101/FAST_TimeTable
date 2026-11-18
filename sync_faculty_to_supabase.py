@@ -217,7 +217,7 @@ CANONICAL_SUBJECT_MAP = {
     "ai-led transformation": "AI Led Transform",
     "embedded control for robotics": "Embed Robo",
     "edge computing": "Edge Comp",
-    "security operations and administration": "Sec Ops",
+    "security operations and administration": "Security Ops",
     "applied information security": "Applied Info Sec",
     "statistical modelling": "Stat Modeling",
     "probability & statistics": "Prob & Stats",
@@ -254,7 +254,7 @@ CANONICAL_SUBJECT_MAP = {
     "knowledge representation and reasoning": "Knowl Rep",
     "advacned statistics": "Adv Stats",                # Excel typo
     "web programming": "Web Prog",
-    "fundamentals of data visualization": "Data Visualization",
+    "fundamentals of data visualization": "Fund of Data Vis",
     "data visualization": "Data Visualization",
     "mlops": "MLOps",
     "deep learning for perception": "Deep Learn",
@@ -301,7 +301,7 @@ CANONICAL_SUBJECT_MAP = {
     "data analysis & visualization lab": "DAV Lab",
     "data warehousing & bi lab": "Data Ware & BI Lab",
     "functional english lab": "Func Eng Lab",
-    "programming for ai lab": "Prof for AI Lab",
+    "programming for ai lab": "Prog for AI Lab",
     "security operations and administration lab": "Sec Ops",
     "vulnerability assessment lab": "Vulnerability Assesment Lab",
 
@@ -398,15 +398,67 @@ def normalized_levenshtein_ratio(s1: str, s2: str) -> float:
         return 1.0
     return 1.0 - (levenshtein_distance(s1, s2) / max_len)
 
+def disambiguate_candidates(
+    candidates: List[Dict[str, Any]],
+    discipline: str = "",
+    is_lab: bool = False,
+    department: str = "",
+    course_title: str = ""
+) -> Optional[Dict[str, Any]]:
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    disc_upper = (discipline or "").strip().upper()
+    title_lower = (course_title or "").strip().lower()
+    dept_lower = (department or "").strip().lower()
+
+    # 1. Discipline / Department Match:
+    # If discipline == "SE" or "(se)" in course_title.lower(): Prefer candidate with "software" in dept.lower()
+    # If discipline == "CS" or "(cs)" in course_title.lower(): Prefer candidate with "computer" in dept.lower()
+    pref_by_dept = []
+    if disc_upper == "SE" or "(se)" in title_lower or "software" in dept_lower:
+        pref_by_dept = [c for c in candidates if "software" in c.get("dept", "").lower()]
+    elif disc_upper == "CS" or "(cs)" in title_lower or "computer" in dept_lower:
+        pref_by_dept = [c for c in candidates if "computer" in c.get("dept", "").lower()]
+
+    if len(pref_by_dept) == 1:
+        return pref_by_dept[0]
+
+    pool = pref_by_dept if len(pref_by_dept) > 1 else candidates
+
+    # 2. Designation / Lab Match:
+    # If is_lab is True: Prefer candidates with desig == "Instructor"
+    # If is_lab is False: Prefer candidates with desig in {"Assistant Professor", "Associate Professor", "Professor", "Lecturer"}
+    if is_lab:
+        lab_candidates = [c for c in pool if c.get("desig") == "Instructor"]
+        if lab_candidates:
+            return lab_candidates[0]
+    else:
+        theory_candidates = [
+            c for c in pool 
+            if c.get("desig") in {"Assistant Professor", "Associate Professor", "Professor", "Lecturer"}
+        ]
+        if theory_candidates:
+            return theory_candidates[0]
+
+    return pool[0]
+
 def find_faculty_match(
     teacher_name: str, 
     faculty_roster: List[Dict[str, Any]], 
-    threshold: float = 0.92
+    threshold: float = 0.92,
+    discipline: str = "",
+    is_lab: bool = False,
+    department: str = "",
+    course_title: str = ""
 ) -> Optional[Dict[str, Any]]:
     """
     Matches an Excel teacher name to an email record in faculty.bin.
     Enforces STRICT Token-Set Equality and Normalized Levenshtein (>= 0.92).
     Eliminates substring collisions (e.g. 'Ali' vs 'Muhammad Ali').
+    Disambiguates duplicate name candidates using discipline, is_lab, department, and course_title.
     """
     clean_target, target_tokens = normalize_person_name(teacher_name)
     if not clean_target or not target_tokens:
@@ -422,6 +474,7 @@ def find_faculty_match(
     target_set = set(target_tokens)
     target_sorted = " ".join(sorted(target_tokens))
     
+    candidates = []
     for fac in faculty_roster:
         fac_name = fac.get("name", "")
         clean_fac, fac_tokens = normalize_person_name(fac_name)
@@ -429,15 +482,25 @@ def find_faculty_match(
             continue
             
         fac_set = set(fac_tokens)
-        fac_sorted = " ".join(sorted(fac_tokens))
         
         # 1. Exact string match after title stripping
         if clean_target == clean_fac:
-            return fac
+            candidates.append(fac)
+            continue
 
         # 2. Strict Token-Set Equality
         if target_set == fac_set:
-            return fac
+            candidates.append(fac)
+            continue
+
+    if candidates:
+        return disambiguate_candidates(
+            candidates,
+            discipline=discipline,
+            is_lab=is_lab,
+            department=department,
+            course_title=course_title
+        )
 
     # Check subset exclusions (e.g. 'zareen' != 'aseefa zareen')
     if clean_target in EXCLUDED_SUBSET_MATCHES:
@@ -458,10 +521,18 @@ def find_faculty_match(
         
         if len(subset_matches) == 1:
             return subset_matches[0]
+        elif len(subset_matches) > 1:
+            return disambiguate_candidates(
+                subset_matches,
+                discipline=discipline,
+                is_lab=is_lab,
+                department=department,
+                course_title=course_title
+            )
 
     # 4. Fuzzy Match (Levenshtein ratio >= 0.88, requires target to have >= 2 tokens)
     if len(target_tokens) >= 2:
-        best_fac = None
+        best_facs = []
         best_ratio = 0.0
         for fac in faculty_roster:
             clean_fac, fac_tokens = normalize_person_name(fac.get("name", ""))
@@ -471,10 +542,18 @@ def find_faculty_match(
             ratio = normalized_levenshtein_ratio(target_sorted, fac_sorted)
             if ratio > best_ratio:
                 best_ratio = ratio
-                best_fac = fac
+                best_facs = [fac]
+            elif ratio == best_ratio and ratio >= 0.88:
+                best_facs.append(fac)
 
-        if best_ratio >= 0.88:
-            return best_fac
+        if best_ratio >= 0.88 and best_facs:
+            return disambiguate_candidates(
+                best_facs,
+                discipline=discipline,
+                is_lab=is_lab,
+                department=department,
+                course_title=course_title
+            )
 
     return None
 
@@ -731,7 +810,30 @@ def compile_faculty_schedules(
 
     for alloc in allocations:
         instr_name = alloc["raw_instructor"]
-        match = find_faculty_match(instr_name, faculty_roster, threshold=0.92)
+        sec = alloc.get("timetable_section", "")
+        disc = sec.split("-")[0] if "-" in sec else ""
+        if not disc:
+            raw_s = alloc.get("raw_section", "").upper()
+            if raw_s.startswith("BCS"):
+                disc = "CS"
+            elif raw_s.startswith("BSE"):
+                disc = "SE"
+            elif raw_s.startswith("BCY"):
+                disc = "CY"
+            elif raw_s.startswith("BDS"):
+                disc = "DS"
+            elif raw_s.startswith("BAI"):
+                disc = "AI"
+
+        match = find_faculty_match(
+            instr_name,
+            faculty_roster,
+            threshold=0.92,
+            discipline=disc,
+            is_lab=alloc.get("is_lab", False),
+            department=alloc.get("sheet", ""),
+            course_title=alloc.get("course_title", "")
+        )
         
         if not match:
             unmatched_instructors.add(instr_name)
@@ -818,6 +920,8 @@ def compile_faculty_schedules(
                 unique_courses_map[c_key]["sections"].add(sec_name)
 
             base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+            if canonical_subj in ("UHQ-II", "UHQ-I&II"):
+                base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
             disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
             letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
@@ -834,8 +938,13 @@ def compile_faculty_schedules(
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
                 select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
+                if len(canonical_subj) <= 3:
+                    # Strict equality for short acronyms to prevent '%LA%' matching 'Data St Lab'
+                    subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
+                    subj_params = (canonical_subj, base_subj)
+                else:
+                    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                    subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
                 queries_to_try = []
 
@@ -1191,6 +1300,8 @@ def sync_from_existing_database(
                 continue
 
             base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+            if canonical_subj in ("UHQ-II", "UHQ-I&II"):
+                base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
             disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
             letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
@@ -1207,8 +1318,13 @@ def sync_from_existing_database(
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
                 select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
+                if len(canonical_subj) <= 3:
+                    # Strict equality for short acronyms to prevent '%LA%' matching 'Data St Lab'
+                    subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
+                    subj_params = (canonical_subj, base_subj)
+                else:
+                    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                    subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
                 queries_to_try = []
 
@@ -1222,6 +1338,11 @@ def sync_from_existing_database(
                             "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                             "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
                         })
+                    # Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Deep Learn)
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                        "params": (b_name,) + subj_params
+                    })
                     queries_to_try.append({
                         "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
                         "params": (sec_name, f"%{sec_name}%") + subj_params
@@ -1256,6 +1377,12 @@ def sync_from_existing_database(
                         "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                         "params": (f"%{disc}%", f"%{letter}%") + subj_params
                     })
+
+                # Final Fallback (Ignore batch completely with blank/null section)
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+                    "params": subj_params
+                })
 
                 for attempt in queries_to_try:
                     target_cursor.execute(attempt["query"], attempt["params"])

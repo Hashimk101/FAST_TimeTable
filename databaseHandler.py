@@ -141,13 +141,13 @@ def get_list_of_dicts_from_df(clean_df: DataFrame, location_col: str = 'Room') -
     return timetable_list
 
 STATUS_PATTERN = re.compile(
-    r'[\s\-_\(\[]*\b(Cancell?ed|Cancel|Resch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Re-?sch(?:edul(?:ed|e))?|Reserved?|Postponed?)\b[\s\-_\)\]]*',
+    r'[\s\-_\(\[]*\b(Cancell?ed|Cancel|Resch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Re-?sch(?:edul(?:ed|e))?|Reserved?|Postponed?|Tutorial|Tut)\b[\s\-_\)\]]*',
     re.IGNORECASE
 )
 
 def extract_status(text: str) -> tuple:
     """
-    Extract status keyword (Cancelled, Rescheduled, Reserved, Postponed) from text
+    Extract status keyword (Cancelled, Rescheduled, Reserved, Postponed, Tutorial) from text
     and return (normalized_status, text_without_status).
     """
     match = STATUS_PATTERN.search(text)
@@ -162,6 +162,8 @@ def extract_status(text: str) -> tuple:
         status = 'Reserved'
     elif raw.startswith('postpon'):
         status = 'Postponed'
+    elif raw.startswith('tut'):
+        status = 'Tutorial'
     else:
         status = raw.capitalize()
 
@@ -292,11 +294,8 @@ def separate_time_slot(time_slot: str) -> tuple:
     if match:
         return match.group(1).strip(), match.group(2).strip()
     
-    # Fallback to original split if regex doesn't match
-    parts = time_slot.split('-')
-    if len(parts) >= 2:
-        return parts[0].strip(), parts[1].strip()
-    return time_slot, time_slot
+    # If no valid time range is matched, do not return malformed strings like ('02:30 (C', '305)')
+    return "", ""
 
 def is_evening_time(start_time: str) -> bool:
     if not start_time:
