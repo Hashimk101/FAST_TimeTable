@@ -7,3 +7,5 @@ openpyxl
 flask
 flask-cors
 waitress
+psycopg2-binary
+requests
