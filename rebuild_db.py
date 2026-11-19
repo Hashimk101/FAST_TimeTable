@@ -50,6 +50,13 @@ def rebuild():
     correct_typos_in_db(COURSE_DATABASE)
     correct_typos_in_db(LAB_DATABASE)
 
+    try:
+        from generate_static_json import generate_static_data
+        print("\nRegenerating static frontend data files...")
+        generate_static_data()
+    except Exception as e:
+        print(f"Warning: Could not regenerate static frontend data: {e}")
+
     print("\nDatabase rebuild complete!")
 
 if __name__ == "__main__":
