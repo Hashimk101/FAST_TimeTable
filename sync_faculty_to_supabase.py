@@ -90,6 +90,11 @@ KNOWN_FACULTY_ALIASES = {
     "shah faisal": "shah.faisal@nu.edu.pk",
     "afaf": "afaf.ahmad@isb.nu.edu.pk",
     "sehrish hassan shigri": "sehrish.hassan@nu.edu.pk",
+    "noor ul ain khattak": "noorul.ain@nu.edu.pk",
+    "noorulain khattak": "noorul.ain@nu.edu.pk",
+    "noor-ul-ain khattak": "noorul.ain@nu.edu.pk",
+    "noor ul ain (cs)": "noorul.ain@nu.edu.pk",
+    "noor ul ain (se)": "noor.ulain@isb.nu.edu.pk",
 }
 
 CANONICAL_FALLBACK_NAMES = {
@@ -218,6 +223,7 @@ CANONICAL_SUBJECT_MAP = {
     "embedded control for robotics": "Embed Robo",
     "edge computing": "Edge Comp",
     "security operations and administration": "Security Ops",
+    "security operations & administration": "Security Ops",
     "applied information security": "Applied Info Sec",
     "statistical modelling": "Stat Modeling",
     "probability & statistics": "Prob & Stats",
@@ -302,7 +308,10 @@ CANONICAL_SUBJECT_MAP = {
     "data warehousing & bi lab": "Data Ware & BI Lab",
     "functional english lab": "Func Eng Lab",
     "programming for ai lab": "Prog for AI Lab",
+    "programing for ai lab": "Prog for AI Lab",
+    "prgramming for ai lab": "Prog for AI Lab",
     "security operations and administration lab": "Sec Ops",
+    "security operations & administration lab": "Sec Ops",
     "vulnerability assessment lab": "Vulnerability Assesment Lab",
 
     # Graduate / MS Courses
@@ -414,14 +423,42 @@ def disambiguate_candidates(
     title_lower = (course_title or "").strip().lower()
     dept_lower = (department or "").strip().lower()
 
+    # Issue 01: Explicit Ms. Noor Ul Ain Disambiguation
+    # Check discipline ('BSE' vs 'BCS'/'BAI'), is_lab, and course_title
+    # If discipline == 'BSE' or is_lab=True for SE AI lab ('AL2002' / 'Artificial Intelligence Lab'),
+    # match noor.ulain@isb.nu.edu.pk (Lecturer/Instructor, SE).
+    # If CS theory, match noorulain.khattak@isb.nu.edu.pk / noorul.ain@nu.edu.pk (Assistant Professor, CS).
+    noor_candidates = [
+        c for c in candidates 
+        if "noor" in c.get("name", "").lower() and "ain" in c.get("name", "").lower()
+    ]
+    if len(noor_candidates) >= 2:
+        is_se_lab = (
+            disc_upper in ("BSE", "SE")
+            or is_lab
+            or any(term in title_lower for term in ("al2002", "artificial intelligence lab", "ai lab", "(se)"))
+            or "software" in dept_lower
+        )
+        if is_se_lab and not (disc_upper in ("BCS", "CS", "BAI", "AI", "BCY", "CY", "BDS", "DS") and not is_lab):
+            for c in noor_candidates:
+                if c.get("email", "").lower().strip() == "noor.ulain@isb.nu.edu.pk" or "software" in c.get("dept", "").lower():
+                    return c
+        else:
+            for c in noor_candidates:
+                if c.get("email", "").lower().strip() in ("noorulain.khattak@isb.nu.edu.pk", "noorul.ain@nu.edu.pk") or "computer" in c.get("dept", "").lower():
+                    return c
+
     # 1. Discipline / Department Match:
-    # If discipline == "SE" or "(se)" in course_title.lower(): Prefer candidate with "software" in dept.lower()
-    # If discipline == "CS" or "(cs)" in course_title.lower(): Prefer candidate with "computer" in dept.lower()
+    # If discipline in ("SE", "BSE") or "(se)" in course_title.lower(): Prefer candidate with "software" in dept.lower()
+    # If discipline in ("CS", "BCS") or "(cs)" in course_title.lower(): Prefer candidate with "computer" in dept.lower()
+    # If discipline in ("AI", "BAI", "DS", "BDS") or "(ai)" in course_title.lower(): Prefer candidate with "artificial" in dept.lower()
     pref_by_dept = []
-    if disc_upper == "SE" or "(se)" in title_lower or "software" in dept_lower:
+    if disc_upper in ("SE", "BSE") or "(se)" in title_lower or "software" in dept_lower:
         pref_by_dept = [c for c in candidates if "software" in c.get("dept", "").lower()]
-    elif disc_upper == "CS" or "(cs)" in title_lower or "computer" in dept_lower:
+    elif disc_upper in ("CS", "BCS") or "(cs)" in title_lower or "computer" in dept_lower:
         pref_by_dept = [c for c in candidates if "computer" in c.get("dept", "").lower()]
+    elif disc_upper in ("AI", "BAI", "DS", "BDS") or "(ai)" in title_lower or "(ds)" in title_lower or "artificial" in dept_lower:
+        pref_by_dept = [c for c in candidates if "artificial" in c.get("dept", "").lower()]
 
     if len(pref_by_dept) == 1:
         return pref_by_dept[0]
@@ -667,6 +704,35 @@ def translate_section_code(raw_sec: str, year: int = 2026, season: str = "fall")
 
     return result
 
+def format_clean_section(sec_str: str) -> str:
+    """
+    Issue 09: Cleans raw combined or slashed section strings into clean comma-separated sections.
+    Examples:
+      'AI/DS-A'  -> 'AI-A, DS-A'
+      'CS/CY-A'  -> 'CS-A, CY-A'
+      'CS-A&B'   -> 'CS-A, CS-B'
+      'AI/DS/CS' -> 'AI, DS, CS'
+    """
+    if not sec_str:
+        return ""
+    sec_str = sec_str.strip()
+    if "/" in sec_str:
+        m = re.match(r'^([A-Z/]+)-([A-Z0-9]+)$', sec_str)
+        if m:
+            discs = m.group(1).split('/')
+            sec_letter = m.group(2)
+            return ", ".join(f"{d.strip()}-{sec_letter}" for d in discs if d.strip())
+        parts = [p.strip() for p in sec_str.split('/') if p.strip()]
+        return ", ".join(parts)
+    if "&" in sec_str:
+        m = re.match(r'^([A-Z]+)-([A-Z0-9]+)&([A-Z0-9]+)$', sec_str)
+        if m:
+            disc = m.group(1)
+            return f"{disc}-{m.group(2)}, {disc}-{m.group(3)}"
+        parts = [p.strip() for p in sec_str.split('&') if p.strip()]
+        return ", ".join(parts)
+    return sec_str
+
 def resolve_canonical_subject(course_title: str, course_code: str = "", is_lab: bool = False) -> str:
     """Maps full course title to its canonical timetable subject shorthand."""
     raw_title = (course_title or "").strip()
@@ -825,11 +891,12 @@ def compile_faculty_schedules(
             elif raw_s.startswith("BAI"):
                 disc = "AI"
 
+        raw_disc = alloc.get("raw_section", "").split("-")[0] if "-" in alloc.get("raw_section", "") else disc
         match = find_faculty_match(
             instr_name,
             faculty_roster,
             threshold=0.92,
-            discipline=disc,
+            discipline=raw_disc or disc,
             is_lab=alloc.get("is_lab", False),
             department=alloc.get("sheet", ""),
             course_title=alloc.get("course_title", "")
@@ -920,17 +987,25 @@ def compile_faculty_schedules(
                 unique_courses_map[c_key]["sections"].add(sec_name)
 
             base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
-            if canonical_subj in ("UHQ-II", "UHQ-I&II"):
+            if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
                 base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
+                subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
+                subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
+            elif len(canonical_subj) <= 3:
+                # Issue 04: Short Acronym Wildcard Collision Guard
+                subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
+                subj_params = (canonical_subj, base_subj)
+            else:
+                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
             disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
             letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
+            # Issue 10: Strict Domain Isolation - NO Cross-DB Leaks
             cursors_to_try = [
-                (cur_lab, "LAB", True),
-                (cur_theory, "CLASSROOM", False)
-            ] if is_lab else [
-                (cur_theory, "CLASSROOM", False),
                 (cur_lab, "LAB", True)
+            ] if is_lab else [
+                (cur_theory, "CLASSROOM", False)
             ]
 
             rows = []
@@ -938,13 +1013,6 @@ def compile_faculty_schedules(
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
                 select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-                if len(canonical_subj) <= 3:
-                    # Strict equality for short acronyms to prevent '%LA%' matching 'Data St Lab'
-                    subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
-                    subj_params = (canonical_subj, base_subj)
-                else:
-                    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                    subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
                 queries_to_try = []
 
@@ -961,6 +1029,10 @@ def compile_faculty_schedules(
                             "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
                         })
                     # 3. Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Agentic AI)
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                        "params": (b_name, canonical_subj, f"%{canonical_subj}%")
+                    })
                     queries_to_try.append({
                         "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                         "params": (b_name,) + subj_params
@@ -1004,6 +1076,10 @@ def compile_faculty_schedules(
                     })
                 # 7. Final Fallback (Ignore batch completely with blank/null section)
                 queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (canonical_subj, f"%{canonical_subj}%")
+                })
+                queries_to_try.append({
                     "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                     "params": subj_params
                 })
@@ -1024,6 +1100,12 @@ def compile_faculty_schedules(
                 if day not in weekly_schedule:
                     continue
 
+                raw_status = str(row["STATUS"] or "").strip()
+                is_cancelled = "cancel" in raw_status.lower() if raw_status else False
+
+                # Issue 09: Faculty Clean Section Badging
+                clean_sec = sec_name if sec_name else format_clean_section(str(row["SECTION"] or ""))
+
                 slot_entry = {
                     "start_time": row["START_TIME"],
                     "end_time": row["END_TIME"],
@@ -1031,10 +1113,11 @@ def compile_faculty_schedules(
                     "course_name": c_title,
                     "course_code": c_code,
                     "location": row["LOCATION"] or "",
-                    "section": row["SECTION"] or sec_name,
+                    "section": clean_sec,
                     "batch": row["BATCH"] or b_name or "",
                     "is_lab": final_is_lab,
-                    "status": row["STATUS"]
+                    "status": row["STATUS"],
+                    "is_cancelled": is_cancelled
                 }
 
                 duplicate_found = False
@@ -1042,8 +1125,15 @@ def compile_faculty_schedules(
                     if (existing["start_time"] == slot_entry["start_time"] and 
                         existing["end_time"] == slot_entry["end_time"] and
                         existing["subject"] == slot_entry["subject"]):
-                        if sec_name and sec_name not in existing["section"]:
-                            existing["section"] = f"{existing['section']}, {sec_name}"
+                        if clean_sec:
+                            existing_secs = [s.strip() for s in existing["section"].split(",") if s.strip()]
+                            for s_part in clean_sec.split(","):
+                                s_part = s_part.strip()
+                                if s_part and s_part not in existing_secs:
+                                    existing_secs.append(s_part)
+                            existing["section"] = ", ".join(sorted(existing_secs))
+                        if is_cancelled:
+                            existing["is_cancelled"] = True
                         duplicate_found = True
                         break
 
@@ -1300,17 +1390,25 @@ def sync_from_existing_database(
                 continue
 
             base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
-            if canonical_subj in ("UHQ-II", "UHQ-I&II"):
+            if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
                 base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
+                subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
+                subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
+            elif len(canonical_subj) <= 3:
+                # Issue 04: Short Acronym Wildcard Collision Guard
+                subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
+                subj_params = (canonical_subj, base_subj)
+            else:
+                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
             disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
             letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
+            # Issue 10: Strict Domain Isolation - NO Cross-DB Leaks
             cursors_to_try = [
-                (cur_lab, "LAB", True),
-                (cur_theory, "CLASSROOM", False)
-            ] if is_lab else [
-                (cur_theory, "CLASSROOM", False),
                 (cur_lab, "LAB", True)
+            ] if is_lab else [
+                (cur_theory, "CLASSROOM", False)
             ]
 
             matches = []
@@ -1318,13 +1416,6 @@ def sync_from_existing_database(
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
                 select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-                if len(canonical_subj) <= 3:
-                    # Strict equality for short acronyms to prevent '%LA%' matching 'Data St Lab'
-                    subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
-                    subj_params = (canonical_subj, base_subj)
-                else:
-                    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                    subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
 
                 queries_to_try = []
 
@@ -1338,7 +1429,11 @@ def sync_from_existing_database(
                             "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
                             "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
                         })
-                    # Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Deep Learn)
+                    # Issue 02: Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Deep Learn, Agentic AI)
+                    queries_to_try.append({
+                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                        "params": (b_name, canonical_subj, f"%{canonical_subj}%")
+                    })
                     queries_to_try.append({
                         "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                         "params": (b_name,) + subj_params
@@ -1380,6 +1475,10 @@ def sync_from_existing_database(
 
                 # Final Fallback (Ignore batch completely with blank/null section)
                 queries_to_try.append({
+                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
+                    "params": (canonical_subj, f"%{canonical_subj}%")
+                })
+                queries_to_try.append({
                     "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
                     "params": subj_params
                 })
@@ -1398,19 +1497,41 @@ def sync_from_existing_database(
             for m in matches:
                 m_day = m["DAY"]
                 if m_day in weekly_schedule:
+                    m_status = str(m["STATUS"] or "").strip()
+                    is_cancelled = "cancel" in m_status.lower() if m_status else False
+                    clean_sec = sec_name if sec_name else format_clean_section(str(m["SECTION"] or ""))
+
                     slot_entry = {
                         "course_code": c_code,
                         "course_name": c_title,
                         "subject": m["SUBJECT"],
                         "batch": m["BATCH"],
-                        "section": m["SECTION"],
+                        "section": clean_sec,
                         "is_lab": final_is_lab,
                         "start_time": m["START_TIME"],
                         "end_time": m["END_TIME"],
                         "location": m["LOCATION"],
-                        "status": m["STATUS"]
+                        "status": m["STATUS"],
+                        "is_cancelled": is_cancelled
                     }
-                    if slot_entry not in weekly_schedule[m_day]:
+                    duplicate_found = False
+                    for existing in weekly_schedule[m_day]:
+                        if (existing["start_time"] == slot_entry["start_time"] and 
+                            existing["end_time"] == slot_entry["end_time"] and
+                            existing["subject"] == slot_entry["subject"]):
+                            if clean_sec:
+                                existing_secs = [s.strip() for s in existing["section"].split(",") if s.strip()]
+                                for s_part in clean_sec.split(","):
+                                    s_part = s_part.strip()
+                                    if s_part and s_part not in existing_secs:
+                                        existing_secs.append(s_part)
+                                existing["section"] = ", ".join(sorted(existing_secs))
+                            if is_cancelled:
+                                existing["is_cancelled"] = True
+                            duplicate_found = True
+                            break
+
+                    if not duplicate_found:
                         weekly_schedule[m_day].append(slot_entry)
                         total_slots += 1
 
