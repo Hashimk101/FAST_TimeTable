@@ -90,12 +90,17 @@ class TestStudentPipeline(unittest.TestCase):
         self.assertEqual(len(c301_slots), 1)
 
     def test_fetch_timetable_for_section(self):
-        """Verify students can retrieve full schedules for exploded sections."""
+        """Verify students can retrieve full schedules for exploded sections, with and without batch."""
         sched = databaseHandler.fetch_timetable_for_section('uni_timetable.db', 'AI-A', ['OOP'])
         monday_classes = sched[0]
         friday_classes = sched[4]
         self.assertTrue(any(c.subject == 'OOP' for c in monday_classes))
         self.assertTrue(any(c.subject == 'OOP' for c in friday_classes))
+
+        # Also test with batch specified (e.g. BS 25 AI searching repeat offering)
+        sched_batch = databaseHandler.fetch_timetable_for_section('uni_timetable.db', 'AI-A', ['OOP'], batch='BS 25 AI')
+        self.assertTrue(any(c.subject == 'OOP' for c in sched_batch[0]))
+        self.assertTrue(any(c.subject == 'OOP' for c in sched_batch[4]))
 
 
 class TestFacultySyncPipeline(unittest.TestCase):
@@ -134,9 +139,9 @@ class TestFacultySyncPipeline(unittest.TestCase):
         for day, s in slots:
             self.assertNotEqual((day, s['start_time']), ('Monday', '03:55'))
             self.assertNotEqual((day, s['start_time']), ('Wednesday', '03:55'))
-        # Section on Friday afternoon should be clean (not raw slashed)
+        # Section on Friday afternoon should be clean (not raw slashed) and include all allocated sections
         fri_lab = [s for day, s in slots if day == 'Friday' and s['start_time'] == '02:30'][0]
-        self.assertEqual(fri_lab['section'], 'AI-A, CS-A')
+        self.assertEqual(fri_lab['section'], 'AI-A, CS-A, CS-B')
 
     def test_v06_aqib_rehman_retention(self):
         """V-06: Aqib Rehman retains Monday and Wednesday 03:55 PM COAL CS-B theory lectures."""

@@ -538,7 +538,12 @@ def explode_section(section: str) -> list:
     m3 = re.match(r'^([A-Z]+(?:/[A-Z]+)+)$', s)
     if m3:
         disciplines = m3.group(1).split('/')
-        return [f'{d}-A' for d in disciplines]
+        exploded = []
+        for d in disciplines:
+            exploded.append(f'{d}-A')
+            if d == 'CS':
+                exploded.append(f'{d}-B')
+        return exploded
 
     return [s]
 
@@ -809,7 +814,7 @@ def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list, 
                     WHERE DAY = ?
                     AND SECTION = ?
                     AND SUBJECT IN ({placeholders})
-                    AND BATCH = ?
+                    AND (BATCH = ? OR BATCH = 'BS Repeat Courses')
                 '''
                 params = [day, section] + list_of_subs + [batch]
             else:
