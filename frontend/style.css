@@ -1878,6 +1878,10 @@ kbd {
   background: #3b82f6; /* Blue */
   color: #fff;
 }
+.status-tutorial, .status-tut {
+  background: #8b5cf6; /* Vibrant Purple/Indigo for Tutorials */
+  color: #fff;
+}
 
 /* Toast Notifications */
 .toast-container {
