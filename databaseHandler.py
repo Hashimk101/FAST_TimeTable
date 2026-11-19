@@ -145,6 +145,8 @@ STATUS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+TIME_PATTERN = re.compile(r'(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})')
+
 def extract_status(text: str) -> tuple:
     """
     Extract status keyword (Cancelled, Rescheduled, Reserved, Postponed, Tutorial) from text
@@ -169,6 +171,8 @@ def extract_status(text: str) -> tuple:
 
     start, end = match.span()
     cleaned = (text[:start] + ' ' + text[end:]).strip()
+    cleaned = STATUS_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'\s*[/\\-]\s*(?=\[|$)', ' ', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned)
     cleaned = re.sub(r'\(\s*\)', '', cleaned).strip()
     if '(' in cleaned and ')' not in cleaned:
@@ -200,13 +204,16 @@ def clean_section(raw_section: str) -> str:
     if in_room_match:
         section = section[:in_room_match.start()].strip()
 
-    # Remove ReSch / Cancelled / Reserved / Postponed / "on for ..." suffixes
+    # Remove ReSch / Cancelled / Reserved / Postponed / Tutorial / "on for ..." suffixes
     section = re.sub(
-        r'\s+(Re-?sch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Cancell?ed|Cancel|Reserved?|Postponed?|on for .*)$',
+        r'\s+(Re-?sch(?:edul(?:ed|e)|udl(?:ed|e)|ed|uled)?|Cancell?ed|Cancel|Reserved?|Postponed?|Tutorial|Tut|on for .*)$',
         '',
         section,
         flags=re.IGNORECASE
     ).strip()
+
+    # Also strip any isolated Tutorial/Tut tokens
+    section = re.sub(r'[\s\-_\(\[]*\b(Tutorial|Tut)\b[\s\-_\)\]]*', '', section, flags=re.IGNORECASE).strip()
 
     # Remove "Audi ..." or venue info after the section code
     audi_match = re.search(r'\s+Audi\s', section)
@@ -244,12 +251,12 @@ def check_if_time_in_subject(subject: str) -> bool:
         in the uni's xlsx file, some slots have timeslot included in the subject name itself(shitty design)
         this function checks if the timeslot is included in the subject string
     '''
-    if not ')' in subject:
+    if ')' not in subject:
         return False
-    first, second = subject.split(')', 1)
+    _, second = subject.split(')', 1)
     if not second.strip():
         return False
-    return '-' in second and ':' in second
+    return bool(TIME_PATTERN.search(second))
 
 def separate_subject_and_section(subject_with_section: str) -> tuple:
     text = subject_with_section.strip()
@@ -290,7 +297,7 @@ def separate_time_and_section_from_subject(subject: str) -> tuple:
 
 
 def separate_time_slot(time_slot: str) -> tuple:
-    match = re.search(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', time_slot)
+    match = TIME_PATTERN.search(str(time_slot))
     if match:
         return match.group(1).strip(), match.group(2).strip()
     
@@ -326,7 +333,7 @@ def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str
         phd_match = re.search(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', text, re.IGNORECASE)
         sec_code = phd_match.group(1).upper() if phd_match else "PCS"
         clean_subj = re.sub(r'\(?(PCS(?:-[A-Z0-9]+)?|PHD(?:-[A-Z0-9]+)?)\)?', '', text).strip()
-        clean_subj = re.sub(r'\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}.*$', '', clean_subj).strip()
+        clean_subj = re.sub(r'\s*\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}.*$', '', clean_subj).strip()
         return {
             "subject": clean_subj,
             "section": sec_code,
@@ -441,6 +448,100 @@ def resolve_postgraduate_entry(subject: str, start_time: str, current_batch: str
         "batch": batch_name
     }
 
+def normalize_room_code(room_str: str) -> str:
+    """Normalize room code to standard format with hyphen (e.g. C301 -> C-301, C-301 -> C-301)."""
+    r = room_str.strip().upper()
+    m = re.match(r'^([A-Z])(\d{3,4})$', r)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return r
+
+ROOM_PATTERN = re.compile(r'\b([A-Z]-?\d{3,4})\b', re.IGNORECASE)
+
+def clean_subject_for_comparison(text: str, target_room: str = '') -> str:
+    """Strip room notes, status, batch tags, times, and punctuation for decoy duplicate comparison."""
+    t = text.lower()
+    t = re.sub(r'\[.*?\]', '', t)
+    t = re.sub(r'\b(room|no\.|in)\b', '', t)
+    if target_room:
+        t = t.replace(target_room.lower(), '')
+        t = t.replace(target_room.replace('-', '').lower(), '')
+    t = re.sub(r'\b(resch|cancelled|cancel|tutorial|reserved|postponed)\b', '', t)
+    t = re.sub(r'\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}', '', t)
+    t = re.sub(r'[^\w\s]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t
+
+def is_decoy_room(location: str, time_slot: str, subject_text: str, clean_df: DataFrame, location_col: str = 'Room') -> bool:
+    """
+    Detects decoy/pointer room cells:
+    When a cell in Room A points to Room B (e.g. 'Fund of Data Vis C-301' in room C-110),
+    and Room B already hosts that course at that time slot, this cell is a decoy pointer.
+    """
+    curr_room = normalize_room_code(str(location))
+    matches = ROOM_PATTERN.findall(subject_text)
+    if not matches:
+        return False
+
+    for m in matches:
+        target_room = normalize_room_code(m)
+        if target_room == curr_room:
+            continue
+
+        # Look for target_room in clean_df
+        target_rows = clean_df[clean_df[location_col].apply(lambda x: normalize_room_code(str(x)) == target_room)]
+        if target_rows.empty or time_slot not in target_rows.columns:
+            continue
+
+        for _, tr in target_rows.iterrows():
+            target_val = str(tr[time_slot]).strip()
+            if not target_val or target_val == 'NIL':
+                continue
+            c1 = clean_subject_for_comparison(subject_text, target_room)
+            c2 = clean_subject_for_comparison(target_val, target_room)
+            if c1 and c2 and (c1 in c2 or c2 in c1 or c1 == c2):
+                return True
+    return False
+
+def explode_section(section: str) -> list:
+    """
+    Explodes combined or slashed section strings into individual section strings.
+    Examples:
+      'AI/DS-A'     -> ['AI-A', 'DS-A']
+      'CS/CY-A'     -> ['CS-A', 'CY-A']
+      'CS/CY-B'     -> ['CS-B', 'CY-B']
+      'CS-B&D'      -> ['CS-B', 'CS-D']
+      'CS-A&B'      -> ['CS-A', 'CS-B']
+      'AI/DS/CS'    -> ['AI-A', 'DS-A', 'CS-A']
+      'CS-A'        -> ['CS-A']
+      ''            -> ['']
+    """
+    s = section.strip()
+    if not s:
+        return [s]
+
+    # Pattern 1: Slashed disciplines with section suffix, e.g. AI/DS-A, CS/CY-A, CS/CY-B
+    m1 = re.match(r'^([A-Z]+(?:/[A-Z]+)+)-([A-Z]\d*)$', s)
+    if m1:
+        disciplines = m1.group(1).split('/')
+        sec_letter = m1.group(2)
+        return [f'{d}-{sec_letter}' for d in disciplines]
+
+    # Pattern 2: Combined section letters with &, e.g. CS-B&D, CS-A&B, SE-A&B
+    m2 = re.match(r'^([A-Z]+)-([A-Z](?:\s*&\s*[A-Z])+)', s)
+    if m2:
+        disc = m2.group(1)
+        letters = re.findall(r'[A-Z]', m2.group(2))
+        return [f'{disc}-{l}' for l in letters]
+
+    # Pattern 3: Slashed disciplines without section letter, e.g. AI/DS/CS
+    m3 = re.match(r'^([A-Z]+(?:/[A-Z]+)+)$', s)
+    if m3:
+        disciplines = m3.group(1).split('/')
+        return [f'{d}-A' for d in disciplines]
+
+    return [s]
+
 def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetable.db',
                      location_col: str = 'Room', db_location_col: str = 'CLASSROOM') -> None:
     conn = sqlite3.connect(db_name)
@@ -482,6 +583,10 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
             if raw_subj.lower() in skip_words:
                 continue
 
+            # Check for decoy/pointer rooms (Issue 07)
+            if is_decoy_room(entry['location'], entry['time_slot'], raw_subj, clean_df, location_col):
+                continue
+
             # 1. Extract batch from subject if present (e.g. "Comp Net (CS-D) Cancelled [BS 24 CS]")
             batch = None
             match = re.search(r'\[(.*?)\]$', entry['subject'])
@@ -494,7 +599,8 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
 
             # 2.5: Postgraduate (MS & PhD) Disambiguation
             time_slot_str = str(entry.get('time_slot', ''))
-            approx_start = time_slot_str.split('-')[0].strip() if '-' in time_slot_str else time_slot_str
+            t_match = TIME_PATTERN.search(time_slot_str)
+            approx_start = t_match.group(1).strip() if t_match else time_slot_str
             pg_res = resolve_postgraduate_entry(entry['subject'], approx_start, batch)
 
             pg_entries = []
@@ -548,21 +654,26 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
                     bth = 'BS Repeat Courses'
 
                 loc = entry['location']
-                if sec:
-                    sub_match = re.match(r'^([A-Z/]+-[A-Z])([1-2])(\s*,.*)?$', sec)
-                    if sub_match:
-                        base_section = sub_match.group(1) + (sub_match.group(3) or "")
-                        subsection_id = sub_match.group(2)
-                        sec = base_section
-                        if loc:
-                            loc = f"{loc} (Part {subsection_id})"
-                        else:
-                            loc = f"(Part {subsection_id})"
 
-                crsr.execute(f'''
-                    INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (day, start_time, end_time, subj, loc, sec, bth, status))
+                # Section explosion (Issue 09)
+                exploded_sections = explode_section(sec)
+                for indiv_sec in exploded_sections:
+                    indiv_loc = loc
+                    if indiv_sec:
+                        sub_match = re.match(r'^([A-Z/]+-[A-Z])([1-2])(\s*,.*)?$', indiv_sec)
+                        if sub_match:
+                            base_section = sub_match.group(1) + (sub_match.group(3) or "")
+                            subsection_id = sub_match.group(2)
+                            indiv_sec = base_section
+                            if indiv_loc:
+                                indiv_loc = f"{indiv_loc} (Part {subsection_id})"
+                            else:
+                                indiv_loc = f"(Part {subsection_id})"
+
+                    crsr.execute(f'''
+                        INSERT OR IGNORE INTO timetable (DAY, START_TIME, END_TIME, SUBJECT, {db_location_col}, SECTION, BATCH, STATUS)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (day, start_time, end_time, subj, indiv_loc, indiv_sec, bth, status))
 
         conn.commit()
     finally:
