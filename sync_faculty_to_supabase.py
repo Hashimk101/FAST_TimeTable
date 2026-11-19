@@ -19,12 +19,13 @@ FAST NUCES Faculty Timetable Ingestion & Synchronization Pipeline:
 import os
 import sys
 import re
+import csv
 import json
 import base64
 import hashlib
 import sqlite3
 import unicodedata
-from typing import Dict, List, Optional, Tuple, Set, Any
+from typing import Dict, List, Optional, Tuple, Set, Any, Union
 from datetime import datetime, timezone
 
 try:
@@ -861,18 +862,237 @@ def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH, year: int = 20
 # 4. TIMETABLE JOIN & PRE-COMPILATION ENGINE
 # =============================================================================
 
+class ReconciliationAuditor:
+    """
+    Tracks and audits discrepancies between Course Allocation workbooks and Room Timetables:
+    1. Unmatched course allocations (courses with 0 slots on schedule).
+    2. Orphaned timetable slots (scheduled rooms with no teacher assigned).
+    3. Acronym and subject typo suggestions.
+    4. Visiting/external instructors with synthetic accounts.
+    """
+    def __init__(self, semester_id: str = "2026-fall"):
+        self.semester_id = semester_id
+        self.total_allocations: int = 0
+        self.matched_allocations: int = 0
+        self.unmatched_allocations: List[Dict[str, Any]] = []
+        self.claimed_slot_keys: Set[Tuple[bool, int]] = set()  # (is_lab, rowid)
+        self.orphaned_slots: List[Dict[str, Any]] = []
+        self.visiting_faculty: List[str] = []
+        self.total_db_slots: int = 0
+        self.claimed_db_slots_count: int = 0
+
+    def record_claimed_slot(self, is_lab: bool, rowid: int):
+        self.claimed_slot_keys.add((is_lab, rowid))
+
+    def record_allocation_matched(self, alloc: Dict[str, Any], fac_info: Dict[str, Any], email: str, rows: List[Any], is_lab: bool):
+        self.total_allocations += 1
+        self.matched_allocations += 1
+
+    def record_allocation_unmatched(self, alloc: Dict[str, Any], fac_info: Dict[str, Any], email: str, cur_theory: sqlite3.Cursor, cur_lab: sqlite3.Cursor):
+        self.total_allocations += 1
+        c_code = alloc.get("course_code") or ""
+        c_title = alloc.get("course_title") or ""
+        b_name = alloc.get("batch") or ""
+        sec_name = str(alloc.get("timetable_section") or "").strip()
+        canonical_subj = str(alloc.get("canonical_subject") or "").strip()
+        is_lab = bool(alloc.get("is_lab", False))
+        sheet = alloc.get("sheet", "")
+        instr_name = fac_info.get("name") or alloc.get("raw_instructor", "")
+
+        is_research = any(term in c_title.lower() for term in ["thesis", "final year project", "fyp", "project-i", "project-ii"])
+        severity = "INFO" if is_research else "WARNING"
+        diag = "Final Year Project / Thesis (independent study, typically not assigned classroom lecture slots)" if is_research else "No timetable slots found for this course, section, and batch combination"
+
+        candidate_cursor = cur_lab if is_lab else cur_theory
+        suggestion = ""
+        if not is_research and b_name:
+            try:
+                candidate_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable WHERE BATCH = ? LIMIT 50", (b_name,))
+                subjs = [r[0] for r in candidate_cursor.fetchall() if r[0]]
+                best_match = None
+                best_score = 0.0
+                for s in subjs:
+                    score = normalized_levenshtein_ratio(canonical_subj.lower(), str(s).lower())
+                    if score > best_score and score >= 0.5:
+                        best_score = score
+                        best_match = str(s)
+                if best_match:
+                    suggestion = f"Timetable has subject '{best_match}' in batch '{b_name}' (similarity {int(best_score*100)}%). Verify CANONICAL_SUBJECT_MAP."
+            except Exception:
+                pass
+
+        if not suggestion and not is_research:
+            suggestion = "Verify if section was scheduled on timetable sheet or if batch code matches."
+
+        self.unmatched_allocations.append({
+            "category": "UNMATCHED_ALLOCATION",
+            "severity": severity,
+            "instructor_name": instr_name,
+            "instructor_email": email,
+            "department": sheet,
+            "course_code": c_code,
+            "course_title": c_title,
+            "canonical_subject": canonical_subj,
+            "batch": b_name,
+            "section": sec_name,
+            "is_lab": is_lab,
+            "details": diag,
+            "suggested_action": suggestion
+        })
+
+    def record_unmatched_instructors(self, instructors: Set[str]):
+        self.visiting_faculty = sorted(list(instructors))
+
+    def finalize(self, cur_theory: sqlite3.Cursor, cur_lab: sqlite3.Cursor, semester_id: str):
+        self.semester_id = semester_id
+        for is_lab, cur, loc_col in [(False, cur_theory, "CLASSROOM"), (True, cur_lab, "LAB")]:
+            cur.execute(f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {loc_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable")
+            all_rows = cur.fetchall()
+            self.total_db_slots += len(all_rows)
+            for r in all_rows:
+                key = (is_lab, r["ID"])
+                if key not in self.claimed_slot_keys:
+                    raw_status = str(r["STATUS"] or "").strip()
+                    is_cancelled = "cancel" in raw_status.lower() if raw_status else False
+                    self.orphaned_slots.append({
+                        "category": "ORPHANED_TIMETABLE_SLOT",
+                        "severity": "INFO" if is_cancelled else "MEDIUM",
+                        "type": "Lab" if is_lab else "Classroom",
+                        "day": r["DAY"],
+                        "start_time": r["START_TIME"],
+                        "end_time": r["END_TIME"],
+                        "subject": r["SUBJECT"],
+                        "location": r["LOCATION"] or "",
+                        "section": r["SECTION"] or "",
+                        "batch": r["BATCH"] or "",
+                        "status": r["STATUS"] or "Regular",
+                        "details": "Classroom slot exists on room timetable, but no faculty member in allocation sheet was assigned to this slot.",
+                        "suggested_action": "Check if an instructor should be assigned in allocation workbook or if this is an open lab/cancelled slot."
+                    })
+        self.claimed_db_slots_count = len(self.claimed_slot_keys)
+
+    def get_summary_dict(self) -> Dict[str, Any]:
+        match_rate = (self.matched_allocations / self.total_allocations * 100.0) if self.total_allocations > 0 else 0.0
+        coverage_rate = (self.claimed_db_slots_count / self.total_db_slots * 100.0) if self.total_db_slots > 0 else 0.0
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "semester_id": self.semester_id,
+            "metrics": {
+                "total_allocations": self.total_allocations,
+                "matched_allocations": self.matched_allocations,
+                "unmatched_allocations": len(self.unmatched_allocations),
+                "allocation_match_rate_pct": round(match_rate, 2),
+                "total_timetable_slots": self.total_db_slots,
+                "claimed_slots": self.claimed_db_slots_count,
+                "orphaned_slots": len(self.orphaned_slots),
+                "timetable_coverage_pct": round(coverage_rate, 2),
+                "visiting_faculty_count": len(self.visiting_faculty)
+            },
+            "unmatched_allocations_count": len(self.unmatched_allocations),
+            "orphaned_slots_count": len(self.orphaned_slots),
+            "visiting_faculty_sample": self.visiting_faculty[:10]
+        }
+
+    def export_csv(self, filepath: str):
+        with open(filepath, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "Category",
+                "Severity",
+                "Instructor Name",
+                "Instructor Email",
+                "Department",
+                "Course Code",
+                "Course Title",
+                "Canonical Subject",
+                "Batch",
+                "Section",
+                "Is Lab",
+                "Day",
+                "Time Window",
+                "Location",
+                "Details",
+                "Suggested Action"
+            ])
+            for u in self.unmatched_allocations:
+                writer.writerow([
+                    u["category"],
+                    u["severity"],
+                    u["instructor_name"],
+                    u["instructor_email"],
+                    u["department"],
+                    u["course_code"],
+                    u["course_title"],
+                    u["canonical_subject"],
+                    u["batch"],
+                    u["section"],
+                    "Yes" if u["is_lab"] else "No",
+                    "",
+                    "",
+                    "",
+                    u["details"],
+                    u["suggested_action"]
+                ])
+            for o in self.orphaned_slots:
+                writer.writerow([
+                    o["category"],
+                    o["severity"],
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    o["subject"],
+                    o["batch"],
+                    o["section"],
+                    "Yes" if o["type"] == "Lab" else "No",
+                    o["day"],
+                    f"{o['start_time']} - {o['end_time']}",
+                    o["location"],
+                    o["details"],
+                    o["suggested_action"]
+                ])
+
+    def export_json(self, filepath: str):
+        summary = self.get_summary_dict()
+        with open(filepath, mode="w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+
+    def print_summary(self):
+        metrics = self.get_summary_dict()["metrics"]
+        print("\n" + "=" * 80)
+        print("📊 INGESTION RECONCILIATION & AUDIT REPORT")
+        print("=" * 80)
+        print(f"Target Semester:                {self.semester_id}")
+        print(f"Total Allocations in Workbook:  {metrics['total_allocations']}")
+        print(f"  ✅ Successfully Mapped:       {metrics['matched_allocations']} ({metrics['allocation_match_rate_pct']}%)")
+        print(f"  ⚠️  Unmatched Allocations:      {metrics['unmatched_allocations']} ({round(100 - metrics['allocation_match_rate_pct'], 2)}%)")
+        print("-" * 80)
+        print(f"Total Timetable Slots in DB:    {metrics['total_timetable_slots']}")
+        print(f"  ✅ Claimed by Faculty:        {metrics['claimed_slots']} ({metrics['timetable_coverage_pct']}%)")
+        print(f"  ⚠️  Orphaned Slots (No Staff): {metrics['orphaned_slots']} ({round(100 - metrics['timetable_coverage_pct'], 2)}%)")
+        print("-" * 80)
+        print(f"Visiting/External Instructors:  {metrics['visiting_faculty_count']}")
+        print("=" * 80 + "\n")
+
+
 def compile_faculty_schedules(
     allocations: List[Dict[str, Any]], 
     faculty_roster: List[Dict[str, Any]],
     theory_db: str = THEORY_DB_PATH,
     lab_db: str = LAB_DB_PATH,
-    semester_id: str = "2026-fall"
-) -> List[Dict[str, Any]]:
+    semester_id: str = "2026-fall",
+    audit_csv_path: Optional[str] = "reconciliation_report.csv",
+    audit_json_path: Optional[str] = "reconciliation_summary.json",
+    return_audit: bool = False
+) -> Union[List[Dict[str, Any]], Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
     """
     Joins allocations with SQLite timetable databases and compiles weekly schedule JSON.
+    Tracks discrepancies and outputs a comprehensive Reconciliation Audit Report.
     """
     faculty_allocations: Dict[str, Dict[str, Any]] = {}
     unmatched_instructors: Set[str] = set()
+    auditor = ReconciliationAuditor(semester_id=semester_id)
 
     for alloc in allocations:
         instr_name = alloc["raw_instructor"]
@@ -928,6 +1148,7 @@ def compile_faculty_schedules(
         faculty_allocations[email]["allocations"].append(alloc)
 
     if unmatched_instructors:
+        auditor.record_unmatched_instructors(unmatched_instructors)
         print(f"[INFO] Generated synthetic accounts for {len(unmatched_instructors)} visiting/external faculty:")
         for u in sorted(unmatched_instructors):
             print(f"  - {u}")
@@ -1012,7 +1233,7 @@ def compile_faculty_schedules(
             final_is_lab = is_lab
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
-                select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+                select_clause = f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
 
                 queries_to_try = []
 
@@ -1094,6 +1315,13 @@ def compile_faculty_schedules(
 
                 if rows:
                     break
+
+            if rows:
+                auditor.record_allocation_matched(alloc, fac_info, email, rows, final_is_lab)
+                for row in rows:
+                    auditor.record_claimed_slot(final_is_lab, row["ID"])
+            else:
+                auditor.record_allocation_unmatched(alloc, fac_info, email, cur_theory, cur_lab)
 
             for row in rows:
                 day = row["DAY"]
@@ -1178,10 +1406,21 @@ def compile_faculty_schedules(
             "schedule_hash": hash_digest
         })
 
+    auditor.finalize(cur_theory, cur_lab, semester_id)
+
+    if audit_csv_path:
+        auditor.export_csv(audit_csv_path)
+    if audit_json_path:
+        auditor.export_json(audit_json_path)
+
+    auditor.print_summary()
+
     conn_theory.close()
     conn_lab.close()
 
     print(f"Compiled weekly schedules for {len(compiled_records)} faculty members.")
+    if return_audit:
+        return compiled_records, auditor.get_summary_dict()
     return compiled_records
 
 # =============================================================================
@@ -1415,7 +1654,7 @@ def sync_from_existing_database(
             final_is_lab = is_lab
 
             for target_cursor, location_col, actual_lab in cursors_to_try:
-                select_clause = f"SELECT DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
+                select_clause = f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
 
                 queries_to_try = []
 
@@ -1585,6 +1824,8 @@ def main():
     parser.add_argument("--season", choices=["fall", "spring", "summer"], default="fall", help="Semester season")
     parser.add_argument("--semester-id", type=str, default=None, help="Explicit semester slug (e.g. 2026-fall, 2027-spring)")
     parser.add_argument("--excel", type=str, default=DEFAULT_EXCEL_PATH, help="Path to Course Allocation Excel workbook")
+    parser.add_argument("--audit-report", type=str, default="reconciliation_report.csv", help="Output path for CSV reconciliation report")
+    parser.add_argument("--audit-json", type=str, default="reconciliation_summary.json", help="Output path for JSON reconciliation summary")
     args = parser.parse_args()
 
     semester_id = args.semester_id or f"{args.year}-{args.season.lower()}"
@@ -1608,7 +1849,13 @@ def main():
         print(f"[MODE] Found '{excel_path}'. Performing full allocation ingestion.")
         faculty_roster = decode_faculty_bin()
         allocations = read_course_allocations(excel_path=excel_path, year=args.year, season=args.season)
-        records = compile_faculty_schedules(allocations, faculty_roster, semester_id=semester_id)
+        records = compile_faculty_schedules(
+            allocations, 
+            faculty_roster, 
+            semester_id=semester_id,
+            audit_csv_path=args.audit_report,
+            audit_json_path=args.audit_json
+        )
 
         if args.dry_run:
             print(f"\n[DRY RUN] Compiled {len(records)} faculty schedules successfully for '{semester_id}'!")
