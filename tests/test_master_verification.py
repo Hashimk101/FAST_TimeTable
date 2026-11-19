@@ -169,5 +169,25 @@ class TestFacultySyncPipeline(unittest.TestCase):
         zafar_subs = {s['subject'] for day in zafar['schedule'].values() for s in day}
         self.assertIn('Security Ops', zafar_subs)
 
+    def test_reconciliation_audit_report(self):
+        """Verify ReconciliationAuditor generates valid CSV and JSON reports with accurate match rates."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = os.path.join(tmpdir, "test_audit.csv")
+            json_path = os.path.join(tmpdir, "test_audit.json")
+            records, audit = sfs.compile_faculty_schedules(
+                self.allocations,
+                self.faculty_roster,
+                audit_csv_path=csv_path,
+                audit_json_path=json_path,
+                return_audit=True
+            )
+            self.assertGreaterEqual(len(records), 200)
+            self.assertIn("metrics", audit)
+            self.assertGreaterEqual(audit["metrics"]["allocation_match_rate_pct"], 95.0)
+            self.assertTrue(os.path.exists(csv_path))
+            self.assertTrue(os.path.exists(json_path))
+            self.assertGreater(os.path.getsize(csv_path), 1000)
+
 if __name__ == '__main__':
     unittest.main()
