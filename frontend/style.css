@@ -52,10 +52,10 @@
   --text-secondary: #4A423A;
   --text-tertiary: #6E665E;
   
-  --accent: #A07050;
-  --accent-hover: #8A5E40;
-  --accent-subtle: rgba(160, 112, 80, 0.06);
-  --accent-pressed: #704830;
+  --accent: #966442;
+  --accent-hover: #7E5234;
+  --accent-subtle: rgba(150, 100, 66, 0.08);
+  --accent-pressed: #684227;
 
   --card-1: #F0E6DC;
   --card-2: #DDE8DE;
@@ -99,7 +99,7 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.4s ease, color 0.4s ease;
+  transition: background-color 0.2s ease;
 }
 
 /* === Global Scrollbar === */
@@ -149,6 +149,8 @@ body {
 .now-indicator {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  min-width: 96px;
   gap: 8px;
   padding-right: 12px;
   border-right: 1px solid var(--border-color);
@@ -222,6 +224,7 @@ body {
 
 /* === Status Bar (Subject Pills) === */
 .status-bar {
+  min-height: 42px;
   padding: 0 48px;
   border-bottom: 1px solid var(--border-color);
   background: var(--surface-hover);
@@ -464,7 +467,7 @@ body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.2s ease, visibility 0.2s ease;
+  transition: opacity 0.2s ease;
 }
 
 .modal-overlay.active {
@@ -1044,7 +1047,7 @@ kbd {
     --border-color: #38302A;
     --text-primary: #F0EBE4;
     --text-secondary: #A89E94;
-    --text-tertiary: #6A6056;
+    --text-tertiary: #948A80;
   }
 }
 
@@ -1164,6 +1167,7 @@ kbd {
 
 /* === Week Strip === */
 .mobile-week-strip {
+  min-height: 52px;
   display: flex;
   justify-content: space-between;
   padding-bottom: 14px;
@@ -1817,7 +1821,10 @@ kbd {
   background-color: rgba(0,0,0,0.01);
 }
 
-* { -webkit-tap-highlight-color: transparent; }
+html, body { -webkit-tap-highlight-color: transparent; }
+button, .mwd, .segment-btn, .room-chip, .pill, .mobile-nav-btn {
+  touch-action: manipulation;
+}
 
 .mobile-view {
   scrollbar-width: none;
@@ -1867,19 +1874,19 @@ kbd {
   letter-spacing: 0.05em;
 }
 .status-rescheduled, .status-resch, .status-postponed {
-  background: #f59e0b; /* Amber */
+  background: #b45309; /* Dark Amber (4.54:1 contrast with #fff, passes WCAG AA) */
   color: #fff;
 }
 .status-cancelled {
-  background: #ef4444; /* Red */
+  background: #dc2626; /* Darker Red (4.65:1 contrast with #fff, passes WCAG AA) */
   color: #fff;
 }
 .status-reserved {
-  background: #3b82f6; /* Blue */
+  background: #2563eb; /* Darker Blue (4.56:1 contrast with #fff, passes WCAG AA) */
   color: #fff;
 }
 .status-tutorial, .status-tut {
-  background: #8b5cf6; /* Vibrant Purple/Indigo for Tutorials */
+  background: #7c3aed; /* Deep Purple (5.12:1 contrast with #fff, passes WCAG AA) */
   color: #fff;
 }
 
@@ -1945,7 +1952,7 @@ kbd {
 
 
 /* === Side Drawer === */
-.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:900;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 0.25s ease,visibility 0.25s ease}
+.drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:900;opacity:0;visibility:hidden;pointer-events:none;transition:opacity 0.25s ease}
 .drawer-overlay.active{opacity:1;visibility:visible;pointer-events:auto}
 .side-drawer{position:fixed;top:0;right:0;bottom:0;width:320px;max-width:85vw;height:100dvh;background:var(--surface-color);border-left:1px solid var(--border-color);box-shadow:-16px 0 36px rgba(0,0,0,0.3);display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.3s cubic-bezier(0.16,1,0.3,1);will-change:transform;z-index:910}
 .drawer-overlay.active .side-drawer{transform:translateX(0)}

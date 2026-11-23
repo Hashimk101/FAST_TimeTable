@@ -42,10 +42,13 @@ function updateClock() {
     const h = now.getHours().toString().padStart(2, '0');
     const m = now.getMinutes().toString().padStart(2, '0');
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    document.getElementById('now-text').textContent = `${days[now.getDay()]} ${h}:${m}`;
+    const el = document.getElementById('now-text');
+    if (el) el.textContent = `${days[now.getDay()]} ${h}:${m}`;
 }
 updateClock();
-setInterval(updateClock, 10000);
+setInterval(() => {
+    if (!document.hidden) updateClock();
+}, 60000);
 
 // === Class Notifications (10m Alert) ===
 function formatTime12(timeStr) {
@@ -228,8 +231,8 @@ modalContent?.addEventListener('touchstart', (e) => {
 }, { passive: true });
 modalContent?.addEventListener('touchend', (e) => {
     const delta = e.changedTouches[0].clientY - modalTouchStartY;
-    if (delta > 100 && modalTouchStartY < 150) closeModal(); // swipe down 100px to dismiss
-});
+    if (delta > 100 && modalTouchStartY < 80 && modalContent.scrollTop <= 0) closeModal(); // swipe down 100px from top handle to dismiss
+}, { passive: true });
 
 // Focus trap: cycle focus within modal
 modal.addEventListener('keydown', (e) => {
@@ -329,12 +332,19 @@ document.querySelectorAll('.profile-card').forEach(card => {
 });
 
 
-// === Binary Data Decoders ===
+// === Binary Data Decoders & Safe Storage ===
+const textDecoderUtf8 = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
+
 function decodeData(encodedStr) {
     try {
         if (!encodedStr) return null;
-        const reversedStr = atob(encodedStr.trim());
-        const jsonStr = reversedStr.split('').reverse().join('');
+        const bin = atob(encodedStr.trim());
+        const len = bin.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = bin.charCodeAt(len - 1 - i);
+        }
+        const jsonStr = textDecoderUtf8 ? textDecoderUtf8.decode(bytes) : String.fromCharCode.apply(null, bytes);
         return JSON.parse(jsonStr);
     } catch (e) {
         console.error("Failed to decode static binary data", e);
@@ -342,29 +352,47 @@ function decodeData(encodedStr) {
     }
 }
 
-async function fetchDecoded(url, versionId = '') {
+function safeSetStorage(key, val) {
     try {
-        const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
-        let res = await fetch(url + queryParam);
+        localStorage.setItem(key, val);
+        return true;
+    } catch (e) {
+        console.warn(`localStorage write failed for key "${key}":`, e);
+        return false;
+    }
+}
+
+let currentAppVersion = localStorage.getItem('cachedTimetableVersion') || '';
+
+async function fetchDecoded(url, versionId = currentAppVersion, timeoutMs = 3500) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    const vParam = versionId || currentAppVersion;
+    const queryParam = vParam ? `?v=${encodeURIComponent(vParam)}` : '';
+    const fullUrl = url + (queryParam ? (url.includes('?') ? '&' : '?') + queryParam : '');
+
+    try {
+        let res = await fetch(fullUrl, controller ? { signal: controller.signal } : {});
+        if (timeoutId) clearTimeout(timeoutId);
         // Fallback: if absolute path fails, try relative path (for local dev servers)
         if (!res.ok && url.startsWith('/')) {
-            res = await fetch(url.slice(1) + queryParam);
+            res = await fetch(fullUrl.slice(1));
         }
         if (!res.ok) return null;
         const text = await res.text();
         return decodeData(text);
     } catch (e) {
+        if (timeoutId) clearTimeout(timeoutId);
         // If absolute path threw, try relative
         if (url.startsWith('/')) {
             try {
-                const queryParam = versionId ? `?v=${encodeURIComponent(versionId)}` : `?t=${Date.now()}`;
-                const res = await fetch(url.slice(1) + queryParam);
+                const res = await fetch(fullUrl.slice(1));
                 if (!res.ok) return null;
                 const text = await res.text();
                 return decodeData(text);
             } catch (_) {}
         }
-        console.warn(`Could not load ${url}`, e);
+        console.warn(`Could not load ${url}:`, e);
         return null;
     }
 }
@@ -386,6 +414,8 @@ function parseTimeMinutes(timeStr) {
 }
 
 let cachedBatchesData = null;
+let cachedSubjectsData = null;
+let cachedRepeatsData = null;
 let isBatchesLoading = false;
 
 async function initBatches() {
@@ -456,7 +486,10 @@ async function loadStep2Data(batchName, courseName) {
 
     try {
         // 1. Regular subjects from static data
-        const allSubjectsMap = await fetchDecoded('/data/subjects.bin') || {};
+        if (!cachedSubjectsData) {
+            cachedSubjectsData = await fetchDecoded('/data/subjects.bin') || {};
+        }
+        const allSubjectsMap = cachedSubjectsData;
         const regSubjects = allSubjectsMap[exactBatch] || allSubjectsMap[batchName] || allSubjectsMap['ALL'] || [];
         renderSubjects(regSubjects, 'subject-list', true);
 
@@ -473,7 +506,10 @@ async function loadStep2Data(batchName, courseName) {
         // 3. Repeater Data
         if (isRepeater) {
             repeatSection.style.display = 'flex';
-            repeatSubjectsData = await fetchDecoded('/data/repeats.bin') || [];
+            if (!cachedRepeatsData) {
+                cachedRepeatsData = await fetchDecoded('/data/repeats.bin') || [];
+            }
+            repeatSubjectsData = cachedRepeatsData;
             const repSelect = document.getElementById('repeat-subject-input');
             repSelect.innerHTML = '<option value="" disabled selected>Select Subject</option>';
             repeatSubjectsData.forEach(sub => {
@@ -725,7 +761,7 @@ async function buildTimetableFromConfig(config, versionId = '') {
 
 let isSyncing = false;
 let lastVersionCheckTimestamp = 0;
-const VERSION_CHECK_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+const VERSION_CHECK_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 
 async function checkForTimetableUpdates(force = false) {
     if (isSyncing) return;
@@ -844,19 +880,19 @@ form.addEventListener('submit', async (e) => {
             repeat_courses: repeatCourses
         };
 
-        const mergedTimetable = await buildTimetableFromConfig(currentConfig);
+        const mergedTimetable = await buildTimetableFromConfig(currentConfig, currentAppVersion);
         
         if (mergedTimetable) {
             lastConfig = currentConfig;
             
-            // Save preferences
-            localStorage.setItem('batch', batch);
-            localStorage.setItem('course', course);
-            localStorage.setItem('section', section);
+            // Save preferences safely
+            safeSetStorage('batch', batch);
+            safeSetStorage('course', course);
+            safeSetStorage('section', section);
 
             // Cache timetable & config for offline use
-            localStorage.setItem('cachedTimetable', JSON.stringify(mergedTimetable));
-            localStorage.setItem('cachedConfig', JSON.stringify(lastConfig));
+            safeSetStorage('cachedTimetable', JSON.stringify(mergedTimetable));
+            safeSetStorage('cachedConfig', JSON.stringify(lastConfig));
 
             // Fetch and record latest version in background
             const vNow = Date.now();
@@ -866,7 +902,8 @@ form.addEventListener('submit', async (e) => {
                 .catch(() => fetch(`data/version.json?t=${vNow}`, { cache: 'no-cache' }).then(r => r.ok ? r.json() : null))
                 .then(v => {
                     if (v?.version) {
-                        localStorage.setItem('cachedTimetableVersion', String(v.version));
+                        currentAppVersion = String(v.version);
+                        safeSetStorage('cachedTimetableVersion', currentAppVersion);
                         lastVersionCheckTimestamp = Date.now();
                     }
                 })
@@ -1016,6 +1053,7 @@ function getSubjectColor(subject) {
 
 // === Status Bar ===
 function updateStatusBar(batch, course, section, subjects, names) {
+    if (window.innerWidth <= 768) return;
     const bar = document.getElementById('status-bar');
     const label = document.getElementById('status-label');
     const pills = document.getElementById('subject-pills');
@@ -1097,6 +1135,7 @@ function updateDesktopTimetableCurrentState() {
 }
 
 function renderTimetable(timetableData) {
+    if (window.innerWidth <= 768) return;
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const grid = document.getElementById('week-grid');
     const emptyState = document.getElementById('empty-state');
@@ -1240,6 +1279,19 @@ function formatTimeLabel(timeStr) {
 function buildMobileWeekStrip() {
     const strip = document.getElementById('mobile-week-strip');
     if (!strip) return;
+
+    // Fast-path: If buttons already exist, toggle active class and aria-pressed (0 DOM allocations)
+    const existingButtons = strip.querySelectorAll('.mwd');
+    if (existingButtons.length === 6) {
+        existingButtons.forEach((btn, idx) => {
+            const isToday = btn.dataset.isToday === 'true';
+            const isActive = mobileSelectedDay === null ? isToday : (mobileSelectedDay === idx);
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+        return;
+    }
+
     strip.innerHTML = '';
 
     const today = new Date();
@@ -1260,6 +1312,7 @@ function buildMobileWeekStrip() {
 
         const el = document.createElement('div');
         el.className = 'mwd' + (isActive ? ' active' : '');
+        el.dataset.isToday = isToday ? 'true' : 'false';
         el.innerHTML = `<span class="mwd-label">${dayNames[i]}</span><span class="mwd-num">${d.getDate()}</span>`;
         
         el.setAttribute('role', 'button');
@@ -1507,6 +1560,7 @@ function renderMobileView(timetableData) {
 
     const checkSvg = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
     const capSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5"/></svg>';
+    const fragment = document.createDocumentFragment();
 
     // Render PAST (Issue #2: all times in 12h)
     past.forEach(cls => {
@@ -1523,7 +1577,7 @@ function renderMobileView(timetableData) {
             </div>
             <div class="m-past-time">${formatTime12h(cls.start_time)} – ${formatTime12h(cls.end_time)}</div>
         `;
-        timeline.appendChild(el);
+        fragment.appendChild(el);
     });
 
     // Issue #8: Always render NOW divider when viewing today
@@ -1535,7 +1589,7 @@ function renderMobileView(timetableData) {
         const ampm = h >= 12 ? 'PM' : 'AM';
         const h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
         nowDiv.innerHTML = `<span class="m-now-label"><span class="m-now-pulse"></span>Now · ${h12}:${m} ${ampm}</span>`;
-        timeline.appendChild(nowDiv);
+        fragment.appendChild(nowDiv);
     }
 
     // Render CURRENT (Hero Card) — Issue #2: 12h times
@@ -1565,7 +1619,7 @@ function renderMobileView(timetableData) {
                 <div class="m-prog-track"><div class="m-prog-fill" style="width:${progress}%"></div></div>
             </div>
         `;
-        timeline.appendChild(el);
+        fragment.appendChild(el);
     }
 
     // Render UPCOMING (Clean Card) — Issue #2: 12h, Issue #6: countdown
@@ -1591,7 +1645,7 @@ function renderMobileView(timetableData) {
                 <div class="m-up-detail">${upcoming.location}</div>
             </div>
         `;
-        timeline.appendChild(el);
+        fragment.appendChild(el);
     }
 
     // Render LATER (Text only) — Issue #2: 12h
@@ -1606,19 +1660,24 @@ function renderMobileView(timetableData) {
             ${cls.status ? `<div class="card-status status-${cls.status.toLowerCase()}">${cls.status}</div>` : ''}
             <div class="m-later-loc">${cls.location}</div>
         `;
-        timeline.appendChild(el);
+        fragment.appendChild(el);
     });
+
+    timeline.appendChild(fragment);
 }
 
 // Init mobile UI
 buildMobileWeekStrip();
 updateMobileDateText();
 
-// Refresh mobile view every minute to keep current/upcoming accurate & sync if sheet changed
+// Refresh mobile view every minute to keep current/upcoming accurate & sync if sheet changed (paused when tab hidden)
 setInterval(() => {
+    if (document.hidden) return;
     if (lastTimetableData) {
         renderMobileView(lastTimetableData);
-        updateDesktopTimetableCurrentState();
+        if (window.innerWidth > 768) {
+            updateDesktopTimetableCurrentState();
+        }
     }
     updateMobileDateText();
     checkForTimetableUpdates();
@@ -1669,7 +1728,7 @@ checkUpcomingClassesForNotification();
     // Swipe right to dismiss
     let touchStartX = 0;
     sideDrawer?.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
-    sideDrawer?.addEventListener('touchend', (e) => { if (e.changedTouches[0].clientX - touchStartX > 75) closeDrawer(); });
+    sideDrawer?.addEventListener('touchend', (e) => { if (e.changedTouches[0].clientX - touchStartX > 75) closeDrawer(); }, { passive: true });
 
     // Nav item: Export PNG
     document.getElementById('nav-item-export')?.addEventListener('click', () => {
@@ -1909,8 +1968,16 @@ checkUpcomingClassesForNotification();
         renderAnnouncements();
     }));
 
+    function debounce(fn, wait = 150) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => fn.apply(this, args), wait);
+        };
+    }
+
     annTimeSlotSelect?.addEventListener('change', renderAnnouncements);
-    annSearchInput?.addEventListener('input', renderAnnouncements);
+    annSearchInput?.addEventListener('input', debounce(renderAnnouncements, 150));
 
     function renderAnnFloors() {
         if (!annFloorGrid) return;
@@ -2058,7 +2125,7 @@ checkUpcomingClassesForNotification();
         });
     });
 
-    facultySearchInput?.addEventListener('input', renderFaculty);
+    facultySearchInput?.addEventListener('input', debounce(renderFaculty, 150));
 
     function renderFaculty() {
         if (!cachedFacultyData || !facultyCardsList) return;
@@ -2106,13 +2173,13 @@ checkUpcomingClassesForNotification();
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
         if (e.key === 'Escape') {
             if (drawerOverlay?.classList.contains('active')) { closeDrawer(); return; }
             if (roomsModal?.classList.contains('active')) { closeRoomsModal(); return; }
             if (annModal?.classList.contains('active')) { closeAnnModal(); return; }
             if (facultyModal?.classList.contains('active')) { closeFacultyModal(); return; }
         }
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
         if (e.key === 'm' || e.key === 'M') {
             drawerOverlay?.classList.contains('active') ? closeDrawer() : openDrawer();
         }
@@ -2125,7 +2192,8 @@ function generateTimetablePNG() {
     const cachedTtStr = localStorage.getItem('cachedTimetable');
     if (!cachedTtStr) { showToast('No timetable data found.'); return; }
     const timetable = JSON.parse(cachedTtStr);
-    const scale = 3;
+    const isMobileScreen = window.innerWidth <= 768;
+    const scale = isMobileScreen ? 1.5 : 3;
     const w = 1920 * scale, h = 1080 * scale;
     const canvas = document.createElement('canvas');
     canvas.width = w; canvas.height = h;

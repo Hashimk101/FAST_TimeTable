@@ -1,16 +1,31 @@
-const CACHE_NAME = 'fast-timetable-v3';
+const CACHE_NAME = 'fast-timetable-v4';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
-  '/style.css',
-  '/script.js',
+  '/style.min.css?v=3.0',
+  '/script.min.js?v=3.0',
   '/manifest.json',
   '/favicon.ico',
   '/favicon.svg',
   '/icon-192.png',
-  '/icon-512.png',
   '/apple-touch-icon.png'
 ];
+
+// Helper: network fetch with timeout for spotty Wi-Fi
+function fetchWithTimeout(request, timeoutMs = 2500) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Network timeout')), timeoutMs);
+    fetch(request)
+      .then(response => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch(err => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 // Install: Pre-cache static assets
 self.addEventListener('install', (event) => {
@@ -36,7 +51,10 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch: Network first with Cache fallback
+// Fetch Strategy:
+// 1. version.json: Network-First with 1500ms timeout (immediate sheet change detection, fast fallback)
+// 2. Navigation: Stale-While-Revalidate with /index.html fallback
+// 3. Static assets, binaries (.bin), images: Stale-While-Revalidate (0ms cache response)
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
@@ -44,30 +62,57 @@ self.addEventListener('fetch', (event) => {
   // Don't intercept analytics or external requests
   if (url.origin !== location.origin || url.pathname.startsWith('/_vercel')) return;
 
+  // 1. Version check: Network-First with fast 1500ms timeout
+  if (url.pathname.includes('version.json')) {
+    event.respondWith(
+      fetchWithTimeout(event.request, 1500)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(event.request, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // 2. Navigation: Stale-While-Revalidate with offline index.html fallback
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match('/index.html').then((cachedResponse) => {
+        const fetchPromise = fetchWithTimeout(event.request, 2500)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', clone));
+            }
+            return networkResponse;
+          })
+          .catch(() => cachedResponse);
+
+        return cachedResponse || fetchPromise;
+      })
+    );
+    return;
+  }
+
+  // 3. Static assets, schedule .bin files, images: Stale-While-Revalidate
   event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-        }
-        return networkResponse;
-      })
-      .catch(async () => {
-        const cachedResponse = await caches.match(event.request, { ignoreSearch: true });
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        if (event.request.mode === 'navigate') {
-          return caches.match('/index.html');
-        }
-        return new Response('Network error occurred', {
-          status: 408,
-          headers: { 'Content-Type': 'text/plain' }
-        });
-      })
+    caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
+      const fetchPromise = fetchWithTimeout(event.request, 3000)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => cachedResponse);
+
+      return cachedResponse || fetchPromise;
+    })
   );
 });
 
