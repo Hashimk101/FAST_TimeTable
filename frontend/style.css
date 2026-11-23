@@ -517,7 +517,7 @@ body {
   border: 1px solid transparent; 
   color: var(--text-tertiary); 
   cursor: pointer; 
-  transition: all 0.2s;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
   width: 32px;
   height: 32px;
   border-radius: var(--r-sm);
@@ -618,7 +618,7 @@ body {
   background: transparent;
   cursor: pointer;
   position: relative;
-  transition: all 0.1s ease-out;
+  transition: background-color 0.1s ease-out, border-color 0.1s ease-out;
 }
 
 .subject-item input[type="checkbox"]:checked {
@@ -704,7 +704,7 @@ body {
   gap: 6px;
   padding: 4px 8px;
   border-radius: var(--r-sm);
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .back-btn:hover {
@@ -731,7 +731,7 @@ body {
   padding: 14px;
   cursor: pointer;
   position: relative;
-  transition: all 0.2s;
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
   background: var(--bg-color);
 }
 
@@ -908,7 +908,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: all 0.2s;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
   height: 35px;
 }
 
@@ -1843,7 +1843,7 @@ button, .mwd, .segment-btn, .room-chip, .pill, .mobile-nav-btn {
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
 }
 
 .empty-cta:hover {
@@ -1977,7 +1977,7 @@ button, .mwd, .segment-btn, .room-chip, .pill, .mobile-nav-btn {
 .segmented-grid{display:grid;gap:6px;background:var(--bg-color);border:1px solid var(--border-color);padding:4px;border-radius:var(--r-md)}
 .segmented-grid-2{grid-template-columns:repeat(2,1fr)}
 .segmented-grid-5{grid-template-columns:repeat(5,1fr)}
-.segment-btn{background:transparent;border:1px solid transparent;color:var(--text-secondary);font-family:inherit;font-size:0.78rem;font-weight:500;padding:8px 4px;border-radius:var(--r-sm);cursor:pointer;text-align:center;transition:all 0.15s ease;min-height:36px}
+.segment-btn{background:transparent;border:1px solid transparent;color:var(--text-secondary);font-family:inherit;font-size:0.78rem;font-weight:500;padding:8px 4px;border-radius:var(--r-sm);cursor:pointer;text-align:center;transition:background-color 0.15s ease,border-color 0.15s ease,color 0.15s ease;min-height:36px}
 .segment-btn:hover{color:var(--text-primary);background:var(--surface-hover)}
 .segment-btn.active{background:var(--surface-color);border-color:var(--border-color);color:var(--accent);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,0.18)}
 .custom-select-wrap{position:relative}

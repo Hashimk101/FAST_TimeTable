@@ -1,8 +1,8 @@
-const CACHE_NAME = 'fast-timetable-v4';
+const CACHE_NAME = 'fast-timetable-v5';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
-  '/style.min.css?v=3.0',
+  '/style.min.css?v=3.1',
   '/script.min.js?v=3.0',
   '/manifest.json',
   '/favicon.ico',
