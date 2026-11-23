@@ -1050,6 +1050,14 @@ kbd {
   }
 }
 
+/* === Responsive: Hide mobile view and mobile nav on desktop === */
+@media (min-width: 769px) {
+  .mobile-view,
+  .mobile-nav {
+    display: none !important;
+  }
+}
+
 /* === Responsive: Hide desktop, show mobile === */
 @media (max-width: 768px) {
   .app-header,
@@ -1109,9 +1117,8 @@ kbd {
   }
 }
 
-/* Mobile View Container - hidden on desktop by default */
+/* Mobile View Container base styles */
 .mobile-view {
-  display: none !important;
   background: var(--bg-color);
   font-family: inherit;
   color: var(--text-primary);
