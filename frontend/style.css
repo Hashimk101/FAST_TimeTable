@@ -52,10 +52,10 @@
   --text-secondary: #4A423A;
   --text-tertiary: #6E665E;
   
-  --accent: #966442;
-  --accent-hover: #7E5234;
-  --accent-subtle: rgba(150, 100, 66, 0.08);
-  --accent-pressed: #684227;
+  --accent: #A07050;
+  --accent-hover: #8A5E40;
+  --accent-subtle: rgba(160, 112, 80, 0.06);
+  --accent-pressed: #704830;
 
   --card-1: #F0E6DC;
   --card-2: #DDE8DE;
@@ -224,7 +224,6 @@ body {
 
 /* === Status Bar (Subject Pills) === */
 .status-bar {
-  min-height: 42px;
   padding: 0 48px;
   border-bottom: 1px solid var(--border-color);
   background: var(--surface-hover);
@@ -1047,7 +1046,7 @@ kbd {
     --border-color: #38302A;
     --text-primary: #F0EBE4;
     --text-secondary: #A89E94;
-    --text-tertiary: #948A80;
+    --text-tertiary: #6A6056;
   }
 }
 
@@ -1110,8 +1109,9 @@ kbd {
   }
 }
 
-/* Mobile View Container */
+/* Mobile View Container - hidden on desktop by default */
 .mobile-view {
+  display: none !important;
   background: var(--bg-color);
   font-family: inherit;
   color: var(--text-primary);
@@ -1167,7 +1167,6 @@ kbd {
 
 /* === Week Strip === */
 .mobile-week-strip {
-  min-height: 52px;
   display: flex;
   justify-content: space-between;
   padding-bottom: 14px;
@@ -1874,19 +1873,19 @@ button, .mwd, .segment-btn, .room-chip, .pill, .mobile-nav-btn {
   letter-spacing: 0.05em;
 }
 .status-rescheduled, .status-resch, .status-postponed {
-  background: #b45309; /* Dark Amber (4.54:1 contrast with #fff, passes WCAG AA) */
+  background: #f59e0b; /* Amber */
   color: #fff;
 }
 .status-cancelled {
-  background: #dc2626; /* Darker Red (4.65:1 contrast with #fff, passes WCAG AA) */
+  background: #ef4444; /* Red */
   color: #fff;
 }
 .status-reserved {
-  background: #2563eb; /* Darker Blue (4.56:1 contrast with #fff, passes WCAG AA) */
+  background: #3b82f6; /* Blue */
   color: #fff;
 }
 .status-tutorial, .status-tut {
-  background: #7c3aed; /* Deep Purple (5.12:1 contrast with #fff, passes WCAG AA) */
+  background: #8b5cf6; /* Vibrant Purple/Indigo for Tutorials */
   color: #fff;
 }
 

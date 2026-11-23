@@ -1053,7 +1053,6 @@ function getSubjectColor(subject) {
 
 // === Status Bar ===
 function updateStatusBar(batch, course, section, subjects, names) {
-    if (window.innerWidth <= 768) return;
     const bar = document.getElementById('status-bar');
     const label = document.getElementById('status-label');
     const pills = document.getElementById('subject-pills');
@@ -1135,7 +1134,6 @@ function updateDesktopTimetableCurrentState() {
 }
 
 function renderTimetable(timetableData) {
-    if (window.innerWidth <= 768) return;
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const grid = document.getElementById('week-grid');
     const emptyState = document.getElementById('empty-state');
@@ -1675,9 +1673,7 @@ setInterval(() => {
     if (document.hidden) return;
     if (lastTimetableData) {
         renderMobileView(lastTimetableData);
-        if (window.innerWidth > 768) {
-            updateDesktopTimetableCurrentState();
-        }
+        updateDesktopTimetableCurrentState();
     }
     updateMobileDateText();
     checkForTimetableUpdates();
