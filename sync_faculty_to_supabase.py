@@ -1427,7 +1427,13 @@ def compile_faculty_schedules(
 # 5. ATOMIC UPSERT ENGINE (POSTGRESQL OR REST FALLBACK)
 # =============================================================================
 
-def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str, semester_id: str = "2026-fall"):
+def upsert_via_psycopg2(
+    records: List[Dict[str, Any]], 
+    database_url: str, 
+    semester_id: str = "2026-fall",
+    audit_summary: Optional[Dict[str, Any]] = None,
+    audit_report_csv: Optional[str] = None
+):
     """Atomic upsert via PostgreSQL connection pooler."""
     conn = psycopg2.connect(database_url)
     conn.autocommit = False
@@ -1490,6 +1496,16 @@ def upsert_via_psycopg2(records: List[Dict[str, Any]], database_url: str, semest
                     stats["inserted"] += 1
                 else:
                     stats["updated"] += 1
+
+        if audit_summary is not None or audit_report_csv is not None:
+            try:
+                cursor.execute("""
+                    UPDATE public.semesters 
+                    SET audit_summary = %s, audit_report = %s, updated_at = timezone('utc'::text, now())
+                    WHERE id = %s;
+                """, (json.dumps(audit_summary) if audit_summary else None, audit_report_csv, semester_id))
+            except Exception as audit_err:
+                print(f"[WARN] Failed to persist audit metadata to semesters table: {audit_err}")
 
         conn.commit()
         print(f"\n[SUCCESS] Supabase Synchronization Complete:")
@@ -1851,15 +1867,21 @@ def main():
         print(f"[MODE] Found '{excel_path}'. Performing full allocation ingestion.")
         faculty_roster = decode_faculty_bin()
         allocations = read_course_allocations(excel_path=excel_path, year=args.year, season=args.season)
-        records = compile_faculty_schedules(
+        records, audit_dict = compile_faculty_schedules(
             allocations, 
             faculty_roster, 
             theory_db=args.theory_db,
             lab_db=args.lab_db,
             semester_id=semester_id,
             audit_csv_path=args.audit_report,
-            audit_json_path=args.audit_json
+            audit_json_path=args.audit_json,
+            return_audit=True
         )
+
+        csv_text = None
+        if os.path.exists(args.audit_report):
+            with open(args.audit_report, "r", encoding="utf-8") as f:
+                csv_text = f.read()
 
         if args.dry_run:
             print(f"\n[DRY RUN] Compiled {len(records)} faculty schedules successfully for '{semester_id}'!")
@@ -1878,7 +1900,13 @@ def main():
             sys.exit(1)
 
         if HAS_PSYCOPG2:
-            upsert_via_psycopg2(records, db_url, semester_id=semester_id)
+            upsert_via_psycopg2(
+                records, 
+                db_url, 
+                semester_id=semester_id,
+                audit_summary=audit_dict,
+                audit_report_csv=csv_text
+            )
         else:
             print("[ERROR] psycopg2 is required for database sync. Please run: pip install psycopg2-binary")
             sys.exit(1)
