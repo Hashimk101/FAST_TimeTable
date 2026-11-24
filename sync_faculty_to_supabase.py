@@ -1826,6 +1826,8 @@ def main():
     parser.add_argument("--excel", type=str, default=DEFAULT_EXCEL_PATH, help="Path to Course Allocation Excel workbook")
     parser.add_argument("--audit-report", type=str, default="reconciliation_report.csv", help="Output path for CSV reconciliation report")
     parser.add_argument("--audit-json", type=str, default="reconciliation_summary.json", help="Output path for JSON reconciliation summary")
+    parser.add_argument("--theory-db", type=str, default=THEORY_DB_PATH, help="Path to theory timetable SQLite database")
+    parser.add_argument("--lab-db", type=str, default=LAB_DB_PATH, help="Path to lab timetable SQLite database")
     args = parser.parse_args()
 
     semester_id = args.semester_id or f"{args.year}-{args.season.lower()}"
@@ -1852,6 +1854,8 @@ def main():
         records = compile_faculty_schedules(
             allocations, 
             faculty_roster, 
+            theory_db=args.theory_db,
+            lab_db=args.lab_db,
             semester_id=semester_id,
             audit_csv_path=args.audit_report,
             audit_json_path=args.audit_json
