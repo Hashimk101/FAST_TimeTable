@@ -188,6 +188,16 @@ class TestSyncIntegrityAndRegression(unittest.TestCase):
             conn_t.close()
             conn_l.close()
 
+    def test_08_theory_never_steals_rescheduled_lab_slots(self):
+        """Theory allocations (is_lab=False) must never steal rescheduled '... Lab' slots from theory rooms."""
+        leaks = []
+        for rec in self.records:
+            for d in sync_mod.DAYS_OF_WEEK:
+                for s in rec["schedule"].get(d, []):
+                    if not s.get("is_lab") and "lab" in str(s.get("subject") or "").lower():
+                        leaks.append((rec["email"], d, s["subject"]))
+        self.assertEqual(leaks, [], f"Found Theory-to-Lab stolen slots: {leaks}")
+
 
 if __name__ == "__main__":
     unittest.main()

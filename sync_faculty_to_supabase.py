@@ -1081,7 +1081,7 @@ def _parse_time_minutes(t_str: str) -> int:
     try:
         parts = str(t_str or "").split(":")
         h, m = int(parts[0]), int(parts[1])
-        if 1 <= h <= 7:
+        if (1 <= h <= 7) or (h == 8 and m < 30):
             h += 12
         return h * 60 + m
     except Exception:
@@ -1140,27 +1140,33 @@ def _merge_custom_activities_from_existing(
     return merged
 
 
-def _build_subject_sql_condition(canonical_subj: str) -> Tuple[str, Tuple[str, ...], str, Tuple[str, ...]]:
+def _build_subject_sql_condition(
+    canonical_subj: str,
+    is_lab: bool = False
+) -> Tuple[str, Tuple[str, ...], str, Tuple[str, ...]]:
     """
     Builds parameterized SQL conditions for full and blank-section timetable lookups.
-    Enforces strict boundary matching on short acronyms (<= 3 chars, e.g. LA vs Lab, SMD vs SMD Nov 27).
+    Enforces strict boundary matching on short acronyms (<= 3 chars, e.g. LA vs Lab, SMD vs SMD Nov 27)
+    and prevents Theory allocations (is_lab=False) from matching rescheduled Lab cells in theory rooms.
     """
     base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+    lab_guard = " AND LOWER(SUBJECT) NOT LIKE '%lab%'" if (not is_lab and "lab" not in canonical_subj.lower()) else ""
+
     if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
-        subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
+        subj_cond = f"((SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?){lab_guard})"
         subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
         return subj_cond, subj_params, subj_cond, subj_params
 
     if len(canonical_subj) <= 3:
-        subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+        subj_cond = f"((SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ?){lab_guard})"
         subj_params = (canonical_subj, base_subj, f"{canonical_subj} %")
-        blank_cond = "(SUBJECT = ? OR SUBJECT LIKE ?)"
+        blank_cond = f"((SUBJECT = ? OR SUBJECT LIKE ?){lab_guard})"
         blank_params = (canonical_subj, f"{canonical_subj} %")
         return subj_cond, subj_params, blank_cond, blank_params
 
-    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+    subj_cond = f"((SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?){lab_guard})"
     subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
-    blank_cond = "(SUBJECT = ? OR SUBJECT LIKE ?)"
+    blank_cond = f"((SUBJECT = ? OR SUBJECT LIKE ?){lab_guard})"
     blank_params = (canonical_subj, f"%{canonical_subj}%")
     return subj_cond, subj_params, blank_cond, blank_params
 
@@ -1180,7 +1186,7 @@ def _query_timetable_slots(
     if not canonical_subj:
         return [], is_lab
 
-    subj_cond, subj_params, blank_cond, blank_params = _build_subject_sql_condition(canonical_subj)
+    subj_cond, subj_params, blank_cond, blank_params = _build_subject_sql_condition(canonical_subj, is_lab=is_lab)
     disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
     letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
 
