@@ -46,7 +46,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python sync_faculty_to_supabase.py
+          python sync_faculty_to_supabase.py --semester-id auto
 
       - name: Commit and Push Updated Data
         run: |

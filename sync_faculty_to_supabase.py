@@ -35,7 +35,7 @@ except ImportError:
 
 try:
     import psycopg2
-    from psycopg2.extras import RealDictCursor
+    from psycopg2.extras import RealDictCursor, execute_values
     HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
@@ -1076,6 +1076,328 @@ class ReconciliationAuditor:
         print("=" * 80 + "\n")
 
 
+def _parse_time_minutes(t_str: str) -> int:
+    """Converts a 12h/university timetable time string into sortable minutes from midnight."""
+    try:
+        parts = str(t_str or "").split(":")
+        h, m = int(parts[0]), int(parts[1])
+        if 1 <= h <= 7:
+            h += 12
+        return h * 60 + m
+    except Exception:
+        return 0
+
+
+def _compute_schedule_hash(weekly_schedule: Dict[str, Any], courses_summary: List[Dict[str, Any]]) -> str:
+    """Computes deterministic SHA-256 hash over schedule and courses manifest."""
+    payload = {
+        "schedule": weekly_schedule,
+        "courses": courses_summary,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _is_custom_slot(slot: Any) -> bool:
+    """Returns True if a schedule slot entry represents a user-created custom activity."""
+    if not isinstance(slot, dict):
+        return False
+    return (
+        slot.get("isCustom") is True
+        or bool(slot.get("customCategory"))
+        or str(slot.get("id", "")).startswith("act")
+    )
+
+
+def _merge_custom_activities_from_existing(
+    weekly_schedule: Dict[str, Any],
+    existing_schedule: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Preserves teacher custom activities, slot overrides, and metadata keys from an
+    existing Supabase schedule object when overwriting university lecture slots.
+    """
+    if not isinstance(existing_schedule, dict):
+        return weekly_schedule
+
+    merged = {
+        k: (list(v) if isinstance(v, list) else v)
+        for k, v in weekly_schedule.items()
+    }
+
+    for k, v in existing_schedule.items():
+        if k not in DAYS_OF_WEEK and k not in merged:
+            merged[k] = v
+
+    for day in DAYS_OF_WEEK:
+        day_slots = merged.setdefault(day, [])
+        existing_day_slots = existing_schedule.get(day, [])
+        if isinstance(existing_day_slots, list):
+            for s in existing_day_slots:
+                if _is_custom_slot(s) and s not in day_slots:
+                    day_slots.append(s)
+        day_slots.sort(key=lambda s: _parse_time_minutes(str(s.get("start_time") or "00:00")))
+
+    return merged
+
+
+def _build_subject_sql_condition(canonical_subj: str) -> Tuple[str, Tuple[str, ...], str, Tuple[str, ...]]:
+    """
+    Builds parameterized SQL conditions for full and blank-section timetable lookups.
+    Enforces strict boundary matching on short acronyms (<= 3 chars, e.g. LA vs Lab, SMD vs SMD Nov 27).
+    """
+    base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
+    if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
+        subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
+        subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
+        return subj_cond, subj_params, subj_cond, subj_params
+
+    if len(canonical_subj) <= 3:
+        subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+        subj_params = (canonical_subj, base_subj, f"{canonical_subj} %")
+        blank_cond = "(SUBJECT = ? OR SUBJECT LIKE ?)"
+        blank_params = (canonical_subj, f"{canonical_subj} %")
+        return subj_cond, subj_params, blank_cond, blank_params
+
+    subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
+    subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
+    blank_cond = "(SUBJECT = ? OR SUBJECT LIKE ?)"
+    blank_params = (canonical_subj, f"%{canonical_subj}%")
+    return subj_cond, subj_params, blank_cond, blank_params
+
+
+def _query_timetable_slots(
+    cur_theory: sqlite3.Cursor,
+    cur_lab: sqlite3.Cursor,
+    b_name: str,
+    sec_name: str,
+    canonical_subj: str,
+    is_lab: bool
+) -> Tuple[List[sqlite3.Row], bool]:
+    """
+    Shared slot resolution cascade used by both full Excel ingestion and continuous DB sync.
+    Strictly isolates Theory vs Lab databases (Issue 10).
+    """
+    if not canonical_subj:
+        return [], is_lab
+
+    subj_cond, subj_params, blank_cond, blank_params = _build_subject_sql_condition(canonical_subj)
+    disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
+    letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
+
+    target_cursor, location_col, actual_lab = (
+        (cur_lab, "LAB", True) if is_lab else (cur_theory, "CLASSROOM", False)
+    )
+    select_clause = (
+        f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, "
+        f"SECTION, BATCH, STATUS FROM timetable"
+    )
+
+    queries_to_try = []
+
+    if b_name:
+        if sec_name:
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                "params": (b_name, sec_name, f"%{sec_name}%") + subj_params
+            })
+        if disc and letter:
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
+            })
+        # Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Agentic AI)
+        queries_to_try.append({
+            "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {blank_cond}",
+            "params": (b_name,) + blank_params
+        })
+        queries_to_try.append({
+            "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+            "params": (b_name,) + subj_params
+        })
+        # Fallback to 'BS Repeat Courses'
+        if sec_name:
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                "params": (sec_name, f"%{sec_name}%") + subj_params
+            })
+        if disc and letter:
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+                "params": (f"%{disc}%", f"%{letter}%") + subj_params
+            })
+        queries_to_try.append({
+            "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+            "params": subj_params
+        })
+        # Graduate / MS / PhD fallback
+        if b_name.startswith("MS") or b_name.startswith("PhD"):
+            if sec_name:
+                queries_to_try.append({
+                    "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+                    "params": (sec_name, f"%{sec_name}%") + subj_params
+                })
+            queries_to_try.append({
+                "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND {subj_cond}",
+                "params": subj_params
+            })
+
+    # Batch-agnostic fallbacks (also enables legacy continuous-sync recovery when batch was unrecorded)
+    if sec_name:
+        queries_to_try.append({
+            "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
+            "params": (sec_name, f"%{sec_name}%") + subj_params
+        })
+    if disc and letter:
+        queries_to_try.append({
+            "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
+            "params": (f"%{disc}%", f"%{letter}%") + subj_params
+        })
+    queries_to_try.append({
+        "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {blank_cond}",
+        "params": blank_params
+    })
+    queries_to_try.append({
+        "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
+        "params": subj_params
+    })
+
+    for attempt in queries_to_try:
+        target_cursor.execute(attempt["query"], attempt["params"])
+        fetched = target_cursor.fetchall()
+        if fetched:
+            return fetched, actual_lab
+
+    return [], is_lab
+
+
+def _merge_slot_into_weekly_schedule(
+    weekly_schedule: Dict[str, List[Dict[str, Any]]],
+    row: sqlite3.Row,
+    c_code: str,
+    c_title: str,
+    sec_name: str,
+    b_name: str,
+    final_is_lab: bool
+) -> int:
+    """Appends or merges a matched SQLite row into weekly_schedule. Returns 1 if added, 0 if merged/skipped."""
+    day = row["DAY"]
+    if day not in weekly_schedule:
+        return 0
+
+    raw_status = str(row["STATUS"] or "").strip()
+    is_cancelled = "cancel" in raw_status.lower() if raw_status else False
+    clean_sec = sec_name if sec_name else format_clean_section(str(row["SECTION"] or ""))
+
+    slot_entry = {
+        "start_time": row["START_TIME"],
+        "end_time": row["END_TIME"],
+        "subject": row["SUBJECT"],
+        "course_name": c_title,
+        "course_code": c_code,
+        "location": row["LOCATION"] or "",
+        "section": clean_sec,
+        "batch": row["BATCH"] or b_name or "",
+        "is_lab": final_is_lab,
+        "status": row["STATUS"],
+        "is_cancelled": is_cancelled,
+    }
+
+    for existing in weekly_schedule[day]:
+        if (
+            existing.get("start_time") == slot_entry["start_time"]
+            and existing.get("end_time") == slot_entry["end_time"]
+            and existing.get("subject") == slot_entry["subject"]
+        ):
+            if clean_sec:
+                existing_secs = [s.strip() for s in str(existing.get("section") or "").split(",") if s.strip()]
+                for s_part in clean_sec.split(","):
+                    s_part = s_part.strip()
+                    if s_part and s_part not in existing_secs:
+                        existing_secs.append(s_part)
+                existing["section"] = ", ".join(sorted(existing_secs))
+            if is_cancelled:
+                existing["is_cancelled"] = True
+            return 0
+
+    weekly_schedule[day].append(slot_entry)
+    return 1
+
+
+def verify_compiled_records_integrity(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Post-compilation invariant checker: flags any non-FYP/Thesis allocated course
+    that resulted in 0 scheduled slots so missing courses are surfaced immediately.
+    """
+    anomalies: List[Dict[str, Any]] = []
+    for rec in records:
+        sched = rec.get("schedule") or {}
+        courses = rec.get("courses") or []
+        all_slots = [
+            s for d in DAYS_OF_WEEK for s in (sched.get(d, []) if isinstance(sched, dict) else [])
+            if isinstance(s, dict) and not _is_custom_slot(s)
+        ]
+        for course in courses:
+            c_code = str(course.get("course_code") or "")
+            c_name = str(course.get("course_name") or "")
+            c_subj = str(course.get("canonical_subject") or "").lower()
+            is_lab = bool(course.get("is_lab", False))
+            if any(k in c_name.lower() or k in c_subj for k in ("final year project", "thesis", "fyp")):
+                continue
+            matched = False
+            for s in all_slots:
+                if bool(s.get("is_lab", False)) != is_lab:
+                    continue
+                s_code = str(s.get("course_code") or "")
+                s_subj = str(s.get("subject") or "").lower()
+                if (c_code and s_code == c_code) or (
+                    c_subj and (c_subj in s_subj or s_subj in c_subj or ("uhq" in c_subj and "uhq" in s_subj))
+                ):
+                    matched = True
+                    break
+            if not matched:
+                anomalies.append({
+                    "name": rec.get("name"),
+                    "email": rec.get("email"),
+                    "course_code": c_code,
+                    "course_name": c_name,
+                    "canonical_subject": course.get("canonical_subject"),
+                    "sections": course.get("sections", []),
+                })
+
+    if anomalies:
+        print(f"[INTEGRITY WARN] {len(anomalies)} non-thesis allocated course(s) have 0 timetable slots:")
+        for a in anomalies[:15]:
+            print(f"  - {a['name']} ({a['email']}): {a['course_code']} {a['canonical_subject']} {a['sections']}")
+    else:
+        print("[INTEGRITY OK] All non-thesis allocated courses have >= 1 scheduled timetable slot.")
+    return anomalies
+
+
+def resolve_active_semester_id(database_url: str, fallback: str = "2026-fall") -> str:
+    """Dynamically resolves the currently active semester ID from public.semesters."""
+    if not HAS_PSYCOPG2 or not database_url:
+        return fallback
+    conn = None
+    cursor = None
+    try:
+        conn = psycopg2.connect(database_url)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM public.semesters WHERE is_active = true ORDER BY updated_at DESC LIMIT 1;"
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return str(row[0])
+    except Exception as err:
+        print(f"[WARN] Could not resolve active semester from DB ({err}); using fallback '{fallback}'.")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+    return fallback
+
+
 def compile_faculty_schedules(
     allocations: List[Dict[str, Any]], 
     faculty_roster: List[Dict[str, Any]],
@@ -1165,16 +1487,6 @@ def compile_faculty_schedules(
 
     compiled_records = []
 
-    def parse_time_minutes(t_str: str) -> int:
-        try:
-            parts = t_str.split(":")
-            h, m = int(parts[0]), int(parts[1])
-            if 1 <= h <= 7:
-                h += 12
-            return h * 60 + m
-        except Exception:
-            return 0
-
     for email, data in faculty_allocations.items():
         fac_info = data["faculty_info"]
         allocs = data["allocations"]
@@ -1201,120 +1513,17 @@ def compile_faculty_schedules(
                     "canonical_subject": canonical_subj,
                     "credit_hours": chs,
                     "is_lab": is_lab,
-                    "sections": set()
+                    "sections": set(),
+                    "allocations": set(),
                 }
                 total_credit_hours += chs
             if sec_name:
                 unique_courses_map[c_key]["sections"].add(sec_name)
+            unique_courses_map[c_key]["allocations"].add((b_name, sec_name))
 
-            base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
-            if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
-                base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
-                subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
-                subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
-            elif len(canonical_subj) <= 3:
-                # Issue 04: Short Acronym Wildcard Collision Guard
-                subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
-                subj_params = (canonical_subj, base_subj)
-            else:
-                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
-            disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
-            letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
-
-            # Issue 10: Strict Domain Isolation - NO Cross-DB Leaks
-            cursors_to_try = [
-                (cur_lab, "LAB", True)
-            ] if is_lab else [
-                (cur_theory, "CLASSROOM", False)
-            ]
-
-            rows = []
-            final_is_lab = is_lab
-
-            for target_cursor, location_col, actual_lab in cursors_to_try:
-                select_clause = f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-
-                queries_to_try = []
-
-                if b_name:
-                    # 1. Exact batch + exact/substring section
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                        "params": (b_name, sec_name, f"%{sec_name}%") + subj_params
-                    })
-                    # 2. Combined section in exact batch (e.g. CS/CY-A)
-                    if disc and letter:
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                            "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
-                        })
-                    # 3. Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Agentic AI)
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                        "params": (b_name, canonical_subj, f"%{canonical_subj}%")
-                    })
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                        "params": (b_name,) + subj_params
-                    })
-                    # 4. Fallback to 'BS Repeat Courses'
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                        "params": (sec_name, f"%{sec_name}%") + subj_params
-                    })
-                    if disc and letter:
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                            "params": (f"%{disc}%", f"%{letter}%") + subj_params
-                        })
-                    # 5. Fallback to 'BS Repeat Courses' with blank/null section (elective courses)
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                        "params": subj_params
-                    })
-
-                    # 5b. Fallback for Graduate / MS / PhD Programs (dedicated batch, elective pools, or open graduate slots)
-                    if b_name.startswith("MS") or b_name.startswith("PhD"):
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                            "params": (sec_name, f"%{sec_name}%") + subj_params
-                        })
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND {subj_cond}",
-                            "params": subj_params
-                        })
-
-                # 6. Final Fallback (Ignore batch completely with section)
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                    "params": (sec_name, f"%{sec_name}%") + subj_params
-                })
-                if disc and letter:
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                        "params": (f"%{disc}%", f"%{letter}%") + subj_params
-                    })
-                # 7. Final Fallback (Ignore batch completely with blank/null section)
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (canonical_subj, f"%{canonical_subj}%")
-                })
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                    "params": subj_params
-                })
-
-                for attempt in queries_to_try:
-                    target_cursor.execute(attempt["query"], attempt["params"])
-                    fetched = target_cursor.fetchall()
-                    if fetched:
-                        rows = fetched
-                        final_is_lab = actual_lab
-                        break
-
-                if rows:
-                    break
+            rows, final_is_lab = _query_timetable_slots(
+                cur_theory, cur_lab, b_name, sec_name, canonical_subj, is_lab
+            )
 
             if rows:
                 auditor.record_allocation_matched(alloc, fac_info, email, rows, final_is_lab)
@@ -1324,53 +1533,12 @@ def compile_faculty_schedules(
                 auditor.record_allocation_unmatched(alloc, fac_info, email, cur_theory, cur_lab)
 
             for row in rows:
-                day = row["DAY"]
-                if day not in weekly_schedule:
-                    continue
-
-                raw_status = str(row["STATUS"] or "").strip()
-                is_cancelled = "cancel" in raw_status.lower() if raw_status else False
-
-                # Issue 09: Faculty Clean Section Badging
-                clean_sec = sec_name if sec_name else format_clean_section(str(row["SECTION"] or ""))
-
-                slot_entry = {
-                    "start_time": row["START_TIME"],
-                    "end_time": row["END_TIME"],
-                    "subject": row["SUBJECT"],
-                    "course_name": c_title,
-                    "course_code": c_code,
-                    "location": row["LOCATION"] or "",
-                    "section": clean_sec,
-                    "batch": row["BATCH"] or b_name or "",
-                    "is_lab": final_is_lab,
-                    "status": row["STATUS"],
-                    "is_cancelled": is_cancelled
-                }
-
-                duplicate_found = False
-                for existing in weekly_schedule[day]:
-                    if (existing["start_time"] == slot_entry["start_time"] and 
-                        existing["end_time"] == slot_entry["end_time"] and
-                        existing["subject"] == slot_entry["subject"]):
-                        if clean_sec:
-                            existing_secs = [s.strip() for s in existing["section"].split(",") if s.strip()]
-                            for s_part in clean_sec.split(","):
-                                s_part = s_part.strip()
-                                if s_part and s_part not in existing_secs:
-                                    existing_secs.append(s_part)
-                            existing["section"] = ", ".join(sorted(existing_secs))
-                        if is_cancelled:
-                            existing["is_cancelled"] = True
-                        duplicate_found = True
-                        break
-
-                if not duplicate_found:
-                    weekly_schedule[day].append(slot_entry)
-                    total_slots += 1
+                total_slots += _merge_slot_into_weekly_schedule(
+                    weekly_schedule, row, c_code, c_title, sec_name, b_name, final_is_lab
+                )
 
         for day in DAYS_OF_WEEK:
-            weekly_schedule[day].sort(key=lambda s: parse_time_minutes(s["start_time"]))
+            weekly_schedule[day].sort(key=lambda s: _parse_time_minutes(s["start_time"]))
 
         courses_summary = []
         for c in unique_courses_map.values():
@@ -1380,17 +1548,15 @@ def compile_faculty_schedules(
                 "canonical_subject": c["canonical_subject"],
                 "credit_hours": c["credit_hours"],
                 "is_lab": c["is_lab"],
-                "sections": sorted(list(c["sections"]))
+                "sections": sorted(list(c["sections"])),
+                "allocations": [
+                    {"batch": b, "section": s}
+                    for b, s in sorted(c["allocations"])
+                ],
             })
         courses_summary.sort(key=lambda x: x["course_code"])
 
-        payload_for_hashing = {
-            "schedule": weekly_schedule,
-            "courses": courses_summary
-        }
-        hash_digest = hashlib.sha256(
-            json.dumps(payload_for_hashing, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        hash_digest = _compute_schedule_hash(weekly_schedule, courses_summary)
 
         compiled_records.append({
             "email": email,
@@ -1414,6 +1580,7 @@ def compile_faculty_schedules(
         auditor.export_json(audit_json_path)
 
     auditor.print_summary()
+    verify_compiled_records_integrity(compiled_records)
 
     conn_theory.close()
     conn_lab.close()
@@ -1427,90 +1594,179 @@ def compile_faculty_schedules(
 # 5. ATOMIC UPSERT ENGINE (POSTGRESQL OR REST FALLBACK)
 # =============================================================================
 
+def _row_has_custom_state(schedule: Any) -> bool:
+    """Returns True if a Supabase schedule JSON holds custom activities or slot overrides."""
+    if not isinstance(schedule, dict):
+        return False
+    if schedule.get("custom_activities") or schedule.get("slot_overrides"):
+        return True
+    return any(
+        _is_custom_slot(s)
+        for day in DAYS_OF_WEEK
+        for s in (schedule.get(day) or [])
+    )
+
+
+def _strip_official_slots_keep_custom(schedule: Any) -> Tuple[Dict[str, Any], int]:
+    """Removes official university timetable slots while keeping custom activities/overrides."""
+    cleaned: Dict[str, Any] = {day: [] for day in DAYS_OF_WEEK}
+    total_custom = 0
+    if isinstance(schedule, dict):
+        for k, v in schedule.items():
+            if k not in DAYS_OF_WEEK:
+                cleaned[k] = v
+        for day in DAYS_OF_WEEK:
+            for s in (schedule.get(day) or []):
+                if _is_custom_slot(s):
+                    cleaned[day].append(s)
+                    total_custom += 1
+            cleaned[day].sort(key=lambda x: _parse_time_minutes(str(x.get("start_time") or "00:00")))
+    return cleaned, total_custom
+
+
 def upsert_via_psycopg2(
-    records: List[Dict[str, Any]], 
-    database_url: str, 
+    records: List[Dict[str, Any]],
+    database_url: str,
     semester_id: str = "2026-fall",
     audit_summary: Optional[Dict[str, Any]] = None,
-    audit_report_csv: Optional[str] = None
+    audit_report_csv: Optional[str] = None,
+    prune_stale: bool = False,
 ):
-    """Atomic upsert via PostgreSQL connection pooler."""
+    """
+    Atomic batch upsert via PostgreSQL connection pooler.
+    - Preserves faculty custom_activities and slot_overrides across full re-syncs.
+    - When prune_stale=True (authoritative Excel ingestion), purges superseded duplicate
+      profiles that have no custom activities.
+    """
     conn = psycopg2.connect(database_url)
     conn.autocommit = False
-    cursor = conn.cursor()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    stats = {"inserted": 0, "updated": 0, "unchanged": 0}
-
-    upsert_query = """
-        INSERT INTO public.faculty_schedules (
-            email, semester_id, name, designation, department, office,
-            schedule, courses, total_weekly_slots, total_credit_hours,
-            schedule_hash, version
-        )
-        VALUES (
-            %(email)s, %(semester_id)s, %(name)s, %(designation)s, %(department)s, %(office)s,
-            %(schedule)s, %(courses)s, %(total_weekly_slots)s, %(total_credit_hours)s,
-            %(schedule_hash)s, 1
-        )
-        ON CONFLICT (email, semester_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            designation = EXCLUDED.designation,
-            department = EXCLUDED.department,
-            office = EXCLUDED.office,
-            schedule = EXCLUDED.schedule,
-            courses = EXCLUDED.courses,
-            total_weekly_slots = EXCLUDED.total_weekly_slots,
-            total_credit_hours = EXCLUDED.total_credit_hours,
-            version = CASE
-                WHEN public.faculty_schedules.schedule_hash = EXCLUDED.schedule_hash THEN public.faculty_schedules.version
-                ELSE public.faculty_schedules.version + 1
-            END,
-            schedule_hash = EXCLUDED.schedule_hash,
-            updated_at = CASE
-                WHEN public.faculty_schedules.schedule_hash = EXCLUDED.schedule_hash THEN public.faculty_schedules.updated_at
-                ELSE timezone('utc'::text, now())
-            END
-        RETURNING (xmax = 0) AS is_insert;
-    """
+    stats = {"inserted": 0, "updated": 0, "pruned": 0}
 
     try:
+        cursor.execute(
+            "SELECT email, schedule, courses FROM public.faculty_schedules WHERE semester_id = %s;",
+            (semester_id,),
+        )
+        existing_rows_by_email = {
+            str(r["email"]).lower().strip(): r for r in cursor.fetchall()
+        }
+
+        incoming_emails: Set[str] = set()
+        value_tuples = []
+
         for rec in records:
-            params = {
-                "email": rec["email"],
-                "semester_id": rec.get("semester_id", semester_id),
-                "name": rec["name"],
-                "designation": rec["designation"],
-                "department": rec["department"],
-                "office": rec["office"],
-                "schedule": json.dumps(rec["schedule"]),
-                "courses": json.dumps(rec["courses"]),
-                "total_weekly_slots": rec["total_weekly_slots"],
-                "total_credit_hours": rec["total_credit_hours"],
-                "schedule_hash": rec["schedule_hash"]
-            }
-            cursor.execute(upsert_query, params)
-            row = cursor.fetchone()
-            if row:
-                is_insert = row[0]
-                if is_insert:
+            email_norm = str(rec["email"]).lower().strip()
+            incoming_emails.add(email_norm)
+            existing_row = existing_rows_by_email.get(email_norm)
+
+            merged_schedule = _merge_custom_activities_from_existing(
+                rec["schedule"],
+                existing_row.get("schedule") if existing_row else None,
+            )
+            total_slots = sum(
+                len(merged_schedule.get(day, [])) for day in DAYS_OF_WEEK
+            )
+            schedule_hash = _compute_schedule_hash(merged_schedule, rec["courses"])
+
+            value_tuples.append((
+                email_norm,
+                rec.get("semester_id", semester_id),
+                rec["name"],
+                rec["designation"],
+                rec["department"],
+                rec["office"],
+                json.dumps(merged_schedule),
+                json.dumps(rec["courses"]),
+                total_slots,
+                rec["total_credit_hours"],
+                schedule_hash,
+                1,
+            ))
+
+        upsert_query = """
+            INSERT INTO public.faculty_schedules (
+                email, semester_id, name, designation, department, office,
+                schedule, courses, total_weekly_slots, total_credit_hours,
+                schedule_hash, version
+            )
+            VALUES %s
+            ON CONFLICT (email, semester_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                designation = EXCLUDED.designation,
+                department = EXCLUDED.department,
+                office = EXCLUDED.office,
+                schedule = EXCLUDED.schedule,
+                courses = EXCLUDED.courses,
+                total_weekly_slots = EXCLUDED.total_weekly_slots,
+                total_credit_hours = EXCLUDED.total_credit_hours,
+                version = CASE
+                    WHEN public.faculty_schedules.schedule_hash = EXCLUDED.schedule_hash THEN public.faculty_schedules.version
+                    ELSE public.faculty_schedules.version + 1
+                END,
+                schedule_hash = EXCLUDED.schedule_hash,
+                updated_at = CASE
+                    WHEN public.faculty_schedules.schedule_hash = EXCLUDED.schedule_hash THEN public.faculty_schedules.updated_at
+                    ELSE timezone('utc'::text, now())
+                END
+            RETURNING (xmax = 0) AS is_insert;
+        """
+
+        if value_tuples:
+            returned = execute_values(cursor, upsert_query, value_tuples, page_size=100, fetch=True)
+            for row in returned:
+                if row and row["is_insert"]:
                     stats["inserted"] += 1
                 else:
                     stats["updated"] += 1
 
+        if prune_stale:
+            for existing_email, existing_row in existing_rows_by_email.items():
+                if existing_email in incoming_emails:
+                    continue
+                existing_sched = existing_row.get("schedule")
+                existing_courses = existing_row.get("courses") or []
+                if _row_has_custom_state(existing_sched) or not existing_courses:
+                    if existing_courses:
+                        cleaned_sched, custom_count = _strip_official_slots_keep_custom(existing_sched)
+                        new_hash = _compute_schedule_hash(cleaned_sched, [])
+                        cursor.execute(
+                            """
+                            UPDATE public.faculty_schedules
+                            SET schedule = %s, courses = '[]'::jsonb, total_weekly_slots = %s,
+                                total_credit_hours = 0, schedule_hash = %s,
+                                updated_at = timezone('utc'::text, now())
+                            WHERE lower(email) = %s AND semester_id = %s;
+                            """,
+                            (json.dumps(cleaned_sched), custom_count, new_hash, existing_email, semester_id),
+                        )
+                    continue
+                cursor.execute(
+                    "DELETE FROM public.faculty_schedules WHERE lower(email) = %s AND semester_id = %s;",
+                    (existing_email, semester_id),
+                )
+                stats["pruned"] += 1
+
         if audit_summary is not None or audit_report_csv is not None:
             try:
-                cursor.execute("""
-                    UPDATE public.semesters 
+                cursor.execute(
+                    """
+                    UPDATE public.semesters
                     SET audit_summary = %s, audit_report = %s, updated_at = timezone('utc'::text, now())
                     WHERE id = %s;
-                """, (json.dumps(audit_summary) if audit_summary else None, audit_report_csv, semester_id))
+                    """,
+                    (json.dumps(audit_summary) if audit_summary else None, audit_report_csv, semester_id),
+                )
             except Exception as audit_err:
                 print(f"[WARN] Failed to persist audit metadata to semesters table: {audit_err}")
 
         conn.commit()
-        print(f"\n[SUCCESS] Supabase Synchronization Complete:")
+        print("\n[SUCCESS] Supabase Synchronization Complete:")
         print(f"  - New Profiles Inserted: {stats['inserted']}")
         print(f"  - Profiles Upserted: {stats['updated']}")
+        if prune_stale:
+            print(f"  - Stale Duplicate Profiles Pruned: {stats['pruned']}")
     except Exception as e:
         conn.rollback()
         print(f"[ERROR] Failed to upsert to Supabase: {e}")
@@ -1519,9 +1775,208 @@ def upsert_via_psycopg2(
         cursor.close()
         conn.close()
 
+
 # =============================================================================
 # 6. CONTINUOUS SYNC FROM DATABASE (When Excel is absent)
 # =============================================================================
+
+def reconcile_existing_db_rows(
+    rows: List[Dict[str, Any]],
+    cur_theory: sqlite3.Cursor,
+    cur_lab: sqlite3.Cursor,
+    semester_id: str = "2026-fall",
+) -> List[Dict[str, Any]]:
+    """
+    Pure reconciliation engine for continuous synchronization when the Excel allocation
+    workbook is absent. Treats `row["courses"]` as the primary authoritative allocation
+    source (so previously-missing or 0-slot courses automatically self-heal), and
+    falls back to `row["schedule"]` only for legacy/unlisted slots.
+    """
+    updated_records = []
+
+    for row in rows:
+        email = row["email"]
+        existing_schedule = row.get("schedule") or {}
+        existing_courses = row.get("courses") or []
+        if isinstance(existing_courses, str):
+            existing_courses = json.loads(existing_courses)
+
+        # Build batch lookup & custom activity snapshot from existing schedule
+        existing_batch_lookup: Dict[Tuple[str, str, bool], str] = {}
+        fallback_schedule_classes: Dict[Tuple[str, str, str, bool], Dict[str, Any]] = {}
+
+        for day in DAYS_OF_WEEK:
+            slots = existing_schedule.get(day, []) if isinstance(existing_schedule, dict) else []
+            if not isinstance(slots, list):
+                continue
+            for s in slots:
+                if not isinstance(s, dict) or _is_custom_slot(s):
+                    continue
+                s_batch = str(s.get("batch") or "").strip()
+                s_sec = str(s.get("section") or "").strip()
+                s_subj = str(s.get("subject") or "").strip()
+                s_code = str(s.get("course_code") or "").strip()
+                s_name = str(s.get("course_name") or "").strip()
+                s_lab = bool(s.get("is_lab", False))
+
+                if s_batch:
+                    if s_code:
+                        existing_batch_lookup[(s_code, s_sec, s_lab)] = s_batch
+                    if s_subj:
+                        existing_batch_lookup[(s_subj.lower(), s_sec, s_lab)] = s_batch
+
+                if s_subj:
+                    fkey = (s_batch, s_sec, s_subj, s_lab)
+                    if fkey not in fallback_schedule_classes:
+                        fallback_schedule_classes[fkey] = {
+                            "batch": s_batch,
+                            "section": s_sec,
+                            "subject": s_subj,
+                            "is_lab": s_lab,
+                            "course_code": s_code,
+                            "course_name": s_name,
+                        }
+
+        # 1. Primary source: authoritative `courses` manifest
+        assigned_classes: Dict[Tuple[str, str, str, bool], Dict[str, Any]] = {}
+        covered_course_codes: Set[Tuple[str, bool]] = set()
+        covered_subjects: Set[Tuple[str, bool]] = set()
+        upgraded_courses = []
+
+        for c in existing_courses:
+            if not isinstance(c, dict):
+                continue
+            c_code = str(c.get("course_code") or "").strip()
+            c_title = str(c.get("course_name") or "").strip()
+            canonical_subj = str(c.get("canonical_subject") or "").strip()
+            if not canonical_subj and c_title:
+                canonical_subj = resolve_canonical_subject(c_title, c_code, bool(c.get("is_lab", False)))
+            is_lab = bool(c.get("is_lab", False))
+
+            if c_code:
+                covered_course_codes.add((c_code, is_lab))
+            if canonical_subj:
+                covered_subjects.add((canonical_subj.lower(), is_lab))
+
+            stored_allocs = c.get("allocations") or []
+            alloc_pairs: List[Tuple[str, str]] = []
+            if isinstance(stored_allocs, list) and stored_allocs:
+                for a in stored_allocs:
+                    if isinstance(a, dict):
+                        alloc_pairs.append((str(a.get("batch") or "").strip(), str(a.get("section") or "").strip()))
+            else:
+                secs = c.get("sections") or [""]
+                if not secs:
+                    secs = [""]
+                for sec_name in secs:
+                    sec_clean = str(sec_name or "").strip()
+                    inferred_batch = (
+                        existing_batch_lookup.get((c_code, sec_clean, is_lab))
+                        or existing_batch_lookup.get((canonical_subj.lower(), sec_clean, is_lab))
+                        or ""
+                    )
+                    if not inferred_batch and sec_clean:
+                        translated = translate_section_code(sec_clean)
+                        if translated.get("batch"):
+                            inferred_batch = translated["batch"]
+                            sec_clean = translated.get("timetable_section", sec_clean)
+                    alloc_pairs.append((inferred_batch, sec_clean))
+
+            discovered_allocs: Set[Tuple[str, str]] = set()
+            for b_name, sec_name in alloc_pairs:
+                key = (b_name, sec_name, canonical_subj, is_lab)
+                if canonical_subj and key not in assigned_classes:
+                    assigned_classes[key] = {
+                        "batch": b_name,
+                        "section": sec_name,
+                        "subject": canonical_subj,
+                        "is_lab": is_lab,
+                        "course_code": c_code,
+                        "course_name": c_title,
+                        "source_course_ref": discovered_allocs,
+                    }
+                discovered_allocs.add((b_name, sec_name))
+
+            upgraded_c = dict(c)
+            upgraded_c["_discovered_allocs"] = discovered_allocs
+            upgraded_courses.append(upgraded_c)
+
+        # 2. Secondary fallback: any schedule entries from courses not listed in `courses`
+        for fkey, cls_info in fallback_schedule_classes.items():
+            fc_code = cls_info["course_code"]
+            fc_subj = cls_info["subject"].lower()
+            fc_lab = cls_info["is_lab"]
+            already_covered = (
+                (fc_code and (fc_code, fc_lab) in covered_course_codes)
+                or (fc_subj, fc_lab) in covered_subjects
+                or any(
+                    (cs and (cs in fc_subj or fc_subj in cs))
+                    for cs, clab in covered_subjects
+                    if clab == fc_lab
+                )
+            )
+            if not already_covered and fkey not in assigned_classes:
+                assigned_classes[fkey] = cls_info
+
+        weekly_schedule = {day: [] for day in DAYS_OF_WEEK}
+        total_slots = 0
+
+        for cls_info in assigned_classes.values():
+            b_name = cls_info.get("batch") or ""
+            sec_name = str(cls_info.get("section") or "").strip()
+            canonical_subj = str(cls_info.get("subject") or "").strip()
+            is_lab = bool(cls_info.get("is_lab", False))
+            c_code = cls_info.get("course_code") or ""
+            c_title = cls_info.get("course_name") or ""
+
+            matches, final_is_lab = _query_timetable_slots(
+                cur_theory, cur_lab, b_name, sec_name, canonical_subj, is_lab
+            )
+
+            ref_set = cls_info.get("source_course_ref")
+            if isinstance(ref_set, set) and matches and not b_name:
+                matched_batches = {str(m["BATCH"] or "").strip() for m in matches if m["BATCH"]}
+                if len(matched_batches) == 1:
+                    ref_set.discard(("", sec_name))
+                    ref_set.add((next(iter(matched_batches)), sec_name))
+
+            for m in matches:
+                total_slots += _merge_slot_into_weekly_schedule(
+                    weekly_schedule, m, c_code, c_title, sec_name, b_name, final_is_lab
+                )
+
+        # Normalize upgraded courses manifest with self-healed allocations
+        final_courses = []
+        for c in upgraded_courses:
+            discovered = c.pop("_discovered_allocs", set())
+            if discovered:
+                c["allocations"] = [
+                    {"batch": b, "section": s} for b, s in sorted(discovered)
+                ]
+            final_courses.append(c)
+
+        # Merge custom activities back in and sort
+        weekly_schedule = _merge_custom_activities_from_existing(weekly_schedule, existing_schedule)
+        total_slots = sum(len(weekly_schedule.get(d, [])) for d in DAYS_OF_WEEK)
+        new_hash = _compute_schedule_hash(weekly_schedule, final_courses)
+
+        updated_records.append({
+            "email": email,
+            "semester_id": row.get("semester_id", semester_id),
+            "name": row["name"],
+            "designation": row["designation"],
+            "department": row["department"],
+            "office": row["office"],
+            "schedule": weekly_schedule,
+            "courses": final_courses,
+            "total_weekly_slots": total_slots,
+            "total_credit_hours": row.get("total_credit_hours", 0),
+            "schedule_hash": new_hash,
+        })
+
+    verify_compiled_records_integrity(updated_records)
+    return updated_records
+
 
 def sync_from_existing_database(
     db_url: str,
@@ -1533,15 +1988,15 @@ def sync_from_existing_database(
     """
     Continuous synchronization mode when Course Allocation Excel sheet is absent.
     Reads existing faculty records from Supabase for the specified semester_id,
-    re-queries uni_timetable.db and uni_timetable_lab.db for each teacher's assigned classes,
-    and updates Supabase only if room/timing changes occur.
+    re-queries uni_timetable.db and uni_timetable_lab.db using `courses` + `schedule`,
+    and updates Supabase atomically.
     """
     if not HAS_PSYCOPG2:
         sys.exit("[ERROR] psycopg2 is required for database sync. Run: pip install psycopg2-binary")
 
     conn_db = psycopg2.connect(db_url)
     cur_db = conn_db.cursor(cursor_factory=RealDictCursor)
-    
+
     cur_db.execute("""
         SELECT email, semester_id, name, designation, department, office, schedule, courses, schedule_hash, version, total_credit_hours
         FROM faculty_schedules
@@ -1565,259 +2020,7 @@ def sync_from_existing_database(
     conn_lab.row_factory = sqlite3.Row
     cur_lab = conn_lab.cursor()
 
-    def parse_time_minutes(t_str: str) -> int:
-        try:
-            parts = t_str.split(":")
-            h, m = int(parts[0]), int(parts[1])
-            if 1 <= h <= 7:
-                h += 12
-            return h * 60 + m
-        except Exception:
-            return 0
-
-    updated_records = []
-
-    for row in rows:
-        email = row["email"]
-        existing_schedule = row["schedule"] or {}
-        
-        # 1. Preserve top-level metadata keys (e.g. custom_activities list, slot_overrides)
-        extra_keys = {
-            k: v for k, v in existing_schedule.items()
-            if k not in DAYS_OF_WEEK
-        }
-
-        # 2. Extract custom activities from day arrays (Office hours, FYP, meetings, etc.)
-        custom_day_activities = {day: [] for day in DAYS_OF_WEEK}
-        assigned_classes = {}
-
-        for day in DAYS_OF_WEEK:
-            slots = existing_schedule.get(day, [])
-            if not isinstance(slots, list):
-                continue
-            for s in slots:
-                if not isinstance(s, dict):
-                    continue
-
-                # Check if it is a custom academic activity
-                is_custom = (
-                    s.get("isCustom") is True
-                    or bool(s.get("customCategory"))
-                    or str(s.get("id", "")).startswith("act")
-                )
-
-                if is_custom:
-                    custom_day_activities[day].append(s)
-                    continue
-
-                # Official university course
-                s_batch = s.get("batch") or ""
-                s_sec = str(s.get("section") or "").strip()
-                s_subj = str(s.get("subject") or "").strip()
-                s_lab = bool(s.get("is_lab", False))
-
-                if not s_subj:
-                    continue
-
-                key = (s_batch, s_sec, s_subj, s_lab)
-                if key not in assigned_classes:
-                    assigned_classes[key] = {
-                        "batch": s_batch,
-                        "section": s_sec,
-                        "subject": s_subj,
-                        "is_lab": s_lab,
-                        "course_code": s.get("course_code", "") or "",
-                        "course_name": s.get("course_name", "") or ""
-                    }
-
-        weekly_schedule = {day: [] for day in DAYS_OF_WEEK}
-        total_slots = 0
-
-        for key, cls_info in assigned_classes.items():
-            b_name = cls_info.get("batch") or ""
-            sec_name = str(cls_info.get("section") or "").strip()
-            canonical_subj = str(cls_info.get("subject") or "").strip()
-            is_lab = bool(cls_info.get("is_lab", False))
-            c_code = cls_info.get("course_code") or ""
-            c_title = cls_info.get("course_name") or ""
-
-            if not canonical_subj:
-                continue
-
-            base_subj = canonical_subj.replace(" Lab", "").strip() if canonical_subj else ""
-            if canonical_subj in ("UHQ-II", "UHQ-I&II", "UHQ-I & II"):
-                base_subj = "UHQ-I&II" if canonical_subj == "UHQ-II" else "UHQ-II"
-                subj_cond = "(SUBJECT = ? OR SUBJECT = ? OR SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT LIKE ?)"
-                subj_params = ("UHQ-II", "UHQ-I&II", "UHQ-I & II", "%UHQ-II%", "%UHQ-I%II%")
-            elif len(canonical_subj) <= 3:
-                # Issue 04: Short Acronym Wildcard Collision Guard
-                subj_cond = "(SUBJECT = ? OR SUBJECT = ?)"
-                subj_params = (canonical_subj, base_subj)
-            else:
-                subj_cond = "(SUBJECT = ? OR SUBJECT LIKE ? OR SUBJECT = ? OR SUBJECT LIKE ?)"
-                subj_params = (canonical_subj, f"%{canonical_subj}%", base_subj, f"%{base_subj}%")
-            disc = sec_name.split("-")[0] if (sec_name and "-" in sec_name) else ""
-            letter = sec_name.split("-")[1] if (sec_name and "-" in sec_name) else ""
-
-            # Issue 10: Strict Domain Isolation - NO Cross-DB Leaks
-            cursors_to_try = [
-                (cur_lab, "LAB", True)
-            ] if is_lab else [
-                (cur_theory, "CLASSROOM", False)
-            ]
-
-            matches = []
-            final_is_lab = is_lab
-
-            for target_cursor, location_col, actual_lab in cursors_to_try:
-                select_clause = f"SELECT ID, DAY, START_TIME, END_TIME, SUBJECT, {location_col} AS LOCATION, SECTION, BATCH, STATUS FROM timetable"
-
-                queries_to_try = []
-
-                if b_name:
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                        "params": (b_name, sec_name, f"%{sec_name}%") + subj_params
-                    })
-                    if disc and letter:
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE BATCH = ? AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                            "params": (b_name, f"%{disc}%", f"%{letter}%") + subj_params
-                        })
-                    # Issue 02: Exact batch with blank/null section (open pool senior electives e.g. Fund of SPM, SMD, Deep Learn, Agentic AI)
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                        "params": (b_name, canonical_subj, f"%{canonical_subj}%")
-                    })
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = ? AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                        "params": (b_name,) + subj_params
-                    })
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                        "params": (sec_name, f"%{sec_name}%") + subj_params
-                    })
-                    if disc and letter:
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                            "params": (f"%{disc}%", f"%{letter}%") + subj_params
-                        })
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE BATCH = 'BS Repeat Courses' AND (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                        "params": subj_params
-                    })
-
-                    # Fallback for Graduate / MS / PhD Programs
-                    if b_name and (b_name.startswith("MS") or b_name.startswith("PhD")):
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                            "params": (sec_name, f"%{sec_name}%") + subj_params
-                        })
-                        queries_to_try.append({
-                            "query": f"{select_clause} WHERE (BATCH = 'MS Electives (All Prgrms)' OR BATCH LIKE 'MS%' OR BATCH LIKE 'PhD%') AND {subj_cond}",
-                            "params": subj_params
-                        })
-
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = ? OR SECTION LIKE ?) AND {subj_cond}",
-                    "params": (sec_name, f"%{sec_name}%") + subj_params
-                })
-                if disc and letter:
-                    queries_to_try.append({
-                        "query": f"{select_clause} WHERE SECTION LIKE ? AND SECTION LIKE ? AND {subj_cond}",
-                        "params": (f"%{disc}%", f"%{letter}%") + subj_params
-                    })
-
-                # Final Fallback (Ignore batch completely with blank/null section)
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND (SUBJECT = ? OR SUBJECT LIKE ?)",
-                    "params": (canonical_subj, f"%{canonical_subj}%")
-                })
-                queries_to_try.append({
-                    "query": f"{select_clause} WHERE (SECTION = '' OR SECTION IS NULL) AND {subj_cond}",
-                    "params": subj_params
-                })
-
-                for attempt in queries_to_try:
-                    target_cursor.execute(attempt["query"], attempt["params"])
-                    fetched = target_cursor.fetchall()
-                    if fetched:
-                        matches = fetched
-                        final_is_lab = actual_lab
-                        break
-
-                if matches:
-                    break
-
-            for m in matches:
-                m_day = m["DAY"]
-                if m_day in weekly_schedule:
-                    m_status = str(m["STATUS"] or "").strip()
-                    is_cancelled = "cancel" in m_status.lower() if m_status else False
-                    clean_sec = sec_name if sec_name else format_clean_section(str(m["SECTION"] or ""))
-
-                    slot_entry = {
-                        "course_code": c_code,
-                        "course_name": c_title,
-                        "subject": m["SUBJECT"],
-                        "batch": m["BATCH"],
-                        "section": clean_sec,
-                        "is_lab": final_is_lab,
-                        "start_time": m["START_TIME"],
-                        "end_time": m["END_TIME"],
-                        "location": m["LOCATION"],
-                        "status": m["STATUS"],
-                        "is_cancelled": is_cancelled
-                    }
-                    duplicate_found = False
-                    for existing in weekly_schedule[m_day]:
-                        if (existing["start_time"] == slot_entry["start_time"] and 
-                            existing["end_time"] == slot_entry["end_time"] and
-                            existing["subject"] == slot_entry["subject"]):
-                            if clean_sec:
-                                existing_secs = [s.strip() for s in existing["section"].split(",") if s.strip()]
-                                for s_part in clean_sec.split(","):
-                                    s_part = s_part.strip()
-                                    if s_part and s_part not in existing_secs:
-                                        existing_secs.append(s_part)
-                                existing["section"] = ", ".join(sorted(existing_secs))
-                            if is_cancelled:
-                                existing["is_cancelled"] = True
-                            duplicate_found = True
-                            break
-
-                    if not duplicate_found:
-                        weekly_schedule[m_day].append(slot_entry)
-                        total_slots += 1
-
-        # 3. Merge custom activities back in and sort
-        for day in DAYS_OF_WEEK:
-            for custom_act in custom_day_activities[day]:
-                if custom_act not in weekly_schedule[day]:
-                    weekly_schedule[day].append(custom_act)
-                    total_slots += 1
-            weekly_schedule[day].sort(key=lambda s: parse_time_minutes(str(s.get("start_time") or "00:00")))
-
-        # 4. Re-attach extra metadata (e.g. custom_activities list, slot_overrides)
-        for k, v in extra_keys.items():
-            weekly_schedule[k] = v
-
-        schedule_canonical_str = json.dumps(weekly_schedule, sort_keys=True)
-        new_hash = hashlib.sha256(schedule_canonical_str.encode("utf-8")).hexdigest()
-
-        updated_records.append({
-            "email": email,
-            "semester_id": row.get("semester_id", semester_id),
-            "name": row["name"],
-            "designation": row["designation"],
-            "department": row["department"],
-            "office": row["office"],
-            "schedule": weekly_schedule,
-            "courses": row["courses"],
-            "total_weekly_slots": total_slots,
-            "total_credit_hours": row.get("total_credit_hours", 0),
-            "schedule_hash": new_hash
-        })
+    updated_records = reconcile_existing_db_rows(rows, cur_theory, cur_lab, semester_id=semester_id)
 
     conn_theory.close()
     conn_lab.close()
@@ -1826,7 +2029,8 @@ def sync_from_existing_database(
         print(f"\n[DRY RUN] Successfully processed {len(updated_records)} faculty profiles from Supabase for semester '{semester_id}'.")
         return
 
-    upsert_via_psycopg2(updated_records, db_url, semester_id=semester_id)
+    upsert_via_psycopg2(updated_records, db_url, semester_id=semester_id, prune_stale=False)
+
 
 # =============================================================================
 # 7. MAIN EXECUTION
@@ -1838,7 +2042,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Compile schedules without uploading to database")
     parser.add_argument("--year", type=int, default=2026, help="Academic year (e.g. 2026, 2027)")
     parser.add_argument("--season", choices=["fall", "spring", "summer"], default="fall", help="Semester season")
-    parser.add_argument("--semester-id", type=str, default=None, help="Explicit semester slug (e.g. 2026-fall, 2027-spring)")
+    parser.add_argument("--semester-id", type=str, default=None, help="Explicit semester slug (e.g. 2026-fall, 2027-spring, or 'auto')")
     parser.add_argument("--excel", type=str, default=DEFAULT_EXCEL_PATH, help="Path to Course Allocation Excel workbook")
     parser.add_argument("--audit-report", type=str, default="reconciliation_report.csv", help="Output path for CSV reconciliation report")
     parser.add_argument("--audit-json", type=str, default="reconciliation_summary.json", help="Output path for JSON reconciliation summary")
@@ -1846,7 +2050,6 @@ def main():
     parser.add_argument("--lab-db", type=str, default=LAB_DB_PATH, help="Path to lab timetable SQLite database")
     args = parser.parse_args()
 
-    semester_id = args.semester_id or f"{args.year}-{args.season.lower()}"
     excel_path = args.excel
 
     # Load DATABASE_URL from .env if present
@@ -1858,24 +2061,29 @@ def main():
                     db_url = line.split("=", 1)[1].strip().strip("'\"")
                     break
 
+    excel_exists = os.path.exists(excel_path)
+
+    if args.semester_id == "auto" or (args.semester_id is None and not excel_exists and db_url):
+        semester_id = resolve_active_semester_id(db_url or "", fallback=f"{args.year}-{args.season.lower()}")
+    else:
+        semester_id = args.semester_id or f"{args.year}-{args.season.lower()}"
+
     print("=== FAST Faculty Timetable Ingestion Pipeline ===")
     print(f"Target Semester: {semester_id} (Year: {args.year}, Season: {args.season})")
-    
-    excel_exists = os.path.exists(excel_path)
-    
+
     if excel_exists:
         print(f"[MODE] Found '{excel_path}'. Performing full allocation ingestion.")
         faculty_roster = decode_faculty_bin()
         allocations = read_course_allocations(excel_path=excel_path, year=args.year, season=args.season)
         records, audit_dict = compile_faculty_schedules(
-            allocations, 
-            faculty_roster, 
+            allocations,
+            faculty_roster,
             theory_db=args.theory_db,
             lab_db=args.lab_db,
             semester_id=semester_id,
             audit_csv_path=args.audit_report,
             audit_json_path=args.audit_json,
-            return_audit=True
+            return_audit=True,
         )
 
         csv_text = None
@@ -1901,11 +2109,12 @@ def main():
 
         if HAS_PSYCOPG2:
             upsert_via_psycopg2(
-                records, 
-                db_url, 
+                records,
+                db_url,
                 semester_id=semester_id,
                 audit_summary=audit_dict,
-                audit_report_csv=csv_text
+                audit_report_csv=csv_text,
+                prune_stale=True,
             )
         else:
             print("[ERROR] psycopg2 is required for database sync. Please run: pip install psycopg2-binary")
@@ -1915,7 +2124,14 @@ def main():
         if not db_url:
             print("[ERROR] DATABASE_URL not set. Continuous sync requires Supabase connection.")
             sys.exit(1)
-        sync_from_existing_database(db_url, dry_run=args.dry_run, semester_id=semester_id)
+        sync_from_existing_database(
+            db_url,
+            theory_db=args.theory_db,
+            lab_db=args.lab_db,
+            dry_run=args.dry_run,
+            semester_id=semester_id,
+        )
+
 
 if __name__ == "__main__":
     main()
