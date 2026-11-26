@@ -192,7 +192,7 @@ def _find_header_row(df: DataFrame, first_col_value: str) -> int:
             first_val = vals[0].lower()
             if first_val == target or first_val.startswith(target) or f"{target}/" in first_val or f"{target} /" in first_val:
                 return i
-    raise ValueError(f"Header row with '{first_col_value}' not found")
+    raise ValueError(f"SHEET_STRUCTURE_INVALID: Header row with '{first_col_value}' not found")
 
 
 def _find_timeslot_columns(header_row: pd.Series, slots: list[str]) -> dict:
@@ -283,6 +283,8 @@ def sheets_to_classroom_df(row_data: list) -> DataFrame:
     Convert raw Google Sheets API grid data (rowData) for one day-sheet into a clean
     classroom DataFrame with batch names appended.
     """
+    if not row_data:
+        raise ValueError("SHEET_STRUCTURE_INVALID: Empty rowData for classroom sheet")
     df = _grid_to_dataframe(row_data)
 
     room_header_idx = _find_header_row(df, "Room")
@@ -309,6 +311,8 @@ def sheets_to_lab_df(row_data: list) -> DataFrame:
     Convert raw Google Sheets API grid data (rowData) for one day-sheet into a clean
     lab DataFrame with batch names appended.
     """
+    if not row_data:
+        raise ValueError("SHEET_STRUCTURE_INVALID: Empty rowData for lab sheet")
     df = _grid_to_dataframe(row_data)
 
     lab_header_idx = _find_header_row(df, "Lab")

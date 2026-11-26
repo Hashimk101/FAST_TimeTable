@@ -80,8 +80,10 @@ class TestSyncIntegrityAndRegression(unittest.TestCase):
     def test_06_continuous_sync_self_heals_courses_missing_from_schedule(self):
         """
         Regression guard: Simulate legacy Supabase rows where `Fund of SPM` and `SMD`
-        exist in `courses` (without `allocations`) while `schedule` omits them completely.
-        `reconcile_existing_db_rows` must recover them automatically without Excel.
+        exist in `courses` (without `allocations`) while `schedule` omits them completely
+        and carries legacy embedded custom activities.
+        `reconcile_existing_db_rows` must recover missing courses automatically without Excel,
+        strip embedded custom activities (strict Layer 1 purity), and emit 12-char slot_uids.
         """
         hina_real = self.by_email["hina.ayaz@isb.nu.edu.pk"]
         saad_real = self.by_email["saad.salman@nu.edu.pk"]
@@ -94,7 +96,7 @@ class TestSyncIntegrityAndRegression(unittest.TestCase):
                 "designation": hina_real["designation"],
                 "department": hina_real["department"],
                 "office": hina_real["office"],
-                # Corrupt/stale schedule missing Fund of SPM slots, plus a custom meeting!
+                # Corrupt/stale schedule missing Fund of SPM slots, plus legacy embedded custom meeting
                 "schedule": {
                     "Monday": [],
                     "Tuesday": [s for s in hina_real["schedule"]["Tuesday"] if s["subject"] == "Info Sec"],
@@ -150,7 +152,7 @@ class TestSyncIntegrityAndRegression(unittest.TestCase):
         conn_l.row_factory = sqlite3.Row
         try:
             reconciled = sync_mod.reconcile_existing_db_rows(
-                legacy_rows, conn_t.cursor(), conn_l.cursor(), semester_id="2026-fall"
+                legacy_rows, conn_t.cursor(), conn_l.cursor(), semester_id="2026-fall", year=2026, season="fall"
             )
         finally:
             conn_t.close()
@@ -159,10 +161,12 @@ class TestSyncIntegrityAndRegression(unittest.TestCase):
         reconciled_by_email = {r["email"]: r for r in reconciled}
 
         hina_healed = reconciled_by_email[hina_real["email"]]
-        hina_subjs = {s["subject"] for d in sync_mod.DAYS_OF_WEEK for s in hina_healed["schedule"][d]}
+        hina_slots = [s for d in sync_mod.DAYS_OF_WEEK for s in hina_healed["schedule"][d]]
+        hina_subjs = {s["subject"] for s in hina_slots}
         self.assertIn("Fund of SPM", hina_subjs)
-        self.assertIn("Office Hours", hina_subjs)
-        self.assertIn("custom_activities", hina_healed["schedule"])
+        self.assertNotIn("Office Hours", hina_subjs)
+        self.assertNotIn("custom_activities", hina_healed["schedule"])
+        self.assertTrue(all(len(s.get("slot_uid", "")) == 12 and s.get("id") == s.get("slot_uid") for s in hina_slots))
 
         saad_healed = reconciled_by_email[saad_real["email"]]
         saad_subjs = {s["subject"] for d in sync_mod.DAYS_OF_WEEK for s in saad_healed["schedule"][d]}

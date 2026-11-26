@@ -1,15 +1,27 @@
-name: Auto Sync Timetable Static Data
+name: Auto Sync & Governance Pipeline
 
 on:
   repository_dispatch:
-    types: [sheet_updated]
+    types:
+      - sheet_updated
+      - ingest_draft_job
+      - refresh_draft_sheet
+      - reconcile_faculty_from_db
+      - publish_student_semester
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Trigger mode (sync or publish_student_semester)"
+        required: false
+        default: "sync"
 
 jobs:
-  sync-and-build:
+  ingest-draft:
+    if: github.event_name == 'repository_dispatch' && (github.event.action == 'ingest_draft_job' || github.event.action == 'refresh_draft_sheet')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    concurrency:
+      group: ingest-${{ github.event.client_payload.job_id }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout Repository
@@ -23,34 +35,414 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 openpyxl psycopg2-binary requests
+          pip install -r requirements.txt
 
       - name: Write Google OAuth Credentials
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
         run: |
-          echo "$GOOGLE_CREDENTIALS" > credentials.json
-          echo "$GOOGLE_TOKEN" > token.json
+          printf '%s\n' "$GOOGLE_CREDENTIALS" > credentials.json
+          printf '%s\n' "$GOOGLE_TOKEN" > token.json
 
-      - name: Rebuild SQLite Databases from Google Sheets
-        run: |
-          python rebuild_db.py
-          python rebuild_subjects.py
-
-      - name: Generate Obfuscated Static Binary Data
-        run: |
-          python generate_static_json.py
-
-      - name: Sync Faculty Schedules to Supabase
+      - name: Run Isolated Draft Worker
+        id: run_ingest
         env:
+          CI: 'true'
+          EVENT_ACTION: ${{ github.event.action }}
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ "$EVENT_ACTION" = "refresh_draft_sheet" ]; then
+            python sync_faculty_to_supabase.py --mode refresh-draft --job-id "$JOB_ID"
+          else
+            python sync_faculty_to_supabase.py --mode draft --job-id "$JOB_ID"
+          fi
+
+      - name: Mark Job Failed on Runner Setup Crash
+        if: failure() && steps.run_ingest.outcome != 'failure'
+        env:
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && [ -n "$JOB_ID" ]; then
+            NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            curl -sS -X PATCH \
+              "${SUPABASE_URL%/}/rest/v1/ingestion_jobs?id=eq.${JOB_ID}&status=in.(QUEUED,RUNNING)" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: application/json" \
+              -d "{\"status\":\"FAILED\",\"error_code\":\"RUNNER_SETUP_FAILED\",\"error_message\":\"Workflow failed before Python worker executed\",\"completed_at\":\"${NOW_ISO}\"}" || true
+          fi
+
+  reconcile-faculty:
+    if: github.event_name == 'repository_dispatch' && github.event.action == 'reconcile_faculty_from_db'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: reconcile-${{ github.event.client_payload.snapshot_id }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Google OAuth Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: |
+          printf '%s\n' "$GOOGLE_CREDENTIALS" > credentials.json
+          printf '%s\n' "$GOOGLE_TOKEN" > token.json
+
+      - name: Reconcile Snapshot Against Live Google Sheet
+        id: reconcile
+        env:
+          CI: 'true'
+          SNAPSHOT_ID: ${{ github.event.client_payload.snapshot_id }}
+          EXPECTED_VERSION: ${{ github.event.client_payload.expected_state_version }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SYNC_CALLBACK_SECRET: ${{ secrets.SYNC_CALLBACK_SECRET }}
+          PORTAL_CALLBACK_URL: ${{ secrets.PORTAL_CALLBACK_URL }}
+        run: |
+          python sync_faculty_to_supabase.py \
+            --mode reconcile-snapshot \
+            --snapshot-id "$SNAPSHOT_ID" \
+            --expected-version "$EXPECTED_VERSION"
+
+      - name: Send FAILED Callback on Runner Setup Crash
+        if: failure() && steps.reconcile.outcome != 'failure'
+        env:
+          CI: 'true'
+          SNAPSHOT_ID: ${{ github.event.client_payload.snapshot_id }}
+          EXPECTED_VERSION: ${{ github.event.client_payload.expected_state_version }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SYNC_CALLBACK_SECRET: ${{ secrets.SYNC_CALLBACK_SECRET }}
+          PORTAL_CALLBACK_URL: ${{ secrets.PORTAL_CALLBACK_URL }}
+        run: |
+          python - <<'PY'
+          import hashlib, hmac, json, os, time, urllib.request
+          snap_id = os.environ.get("SNAPSHOT_ID", "").strip()
+          exp_ver = os.environ.get("EXPECTED_VERSION", "").strip()
+          supa_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+          supa_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+          cb_url = os.environ.get("PORTAL_CALLBACK_URL", "").strip().rstrip("/")
+          cb_sec = os.environ.get("SYNC_CALLBACK_SECRET", "").strip()
+          if not (snap_id and exp_ver and supa_url and supa_key and cb_url and cb_sec):
+              raise SystemExit(0)
+          req = urllib.request.Request(
+              f"{supa_url}/rest/v1/semester_snapshots?id=eq.{snap_id}&select=semester_id&limit=1",
+              headers={"apikey": supa_key, "Authorization": f"Bearer {supa_key}"},
+          )
+          with urllib.request.urlopen(req, timeout=20) as resp:
+              rows = json.loads(resp.read().decode("utf-8"))
+          if not rows:
+              raise SystemExit(0)
+          sem_id = rows[0]["semester_id"]
+          body = json.dumps({
+              "semester_id": sem_id,
+              "state_version": int(exp_ver),
+              "status": "FAILED",
+              "error_message": "RUNNER_SETUP_FAILED: Workflow failed before snapshot reconcile started",
+          }, separators=(",", ":"))
+          ts = str(int(time.time()))
+          sig = hmac.new(cb_sec.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
+          cb_req = urllib.request.Request(
+              f"{cb_url}/api/semesters?action=faculty_sync_callback",
+              data=body.encode("utf-8"),
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Timestamp": ts,
+                  "X-Signature": f"sha256={sig}",
+              },
+          )
+          urllib.request.urlopen(cb_req, timeout=20).read()
+          PY
+
+  publish-student-semester:
+    if: (github.event_name == 'repository_dispatch' && github.event.action == 'publish_student_semester') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'publish_student_semester')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: student-portal-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Google OAuth Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: |
+          printf '%s\n' "$GOOGLE_CREDENTIALS" > credentials.json
+          printf '%s\n' "$GOOGLE_TOKEN" > token.json
+
+      - name: Resolve Active Semester Configuration
+        id: resolve
+        env:
+          CI: 'true'
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          python sync_faculty_to_supabase.py --semester-id auto
+          python - <<'PY'
+          import json, os, config
+          cfg = config.get_active_semester_config()
+          print(f"Resolved active semester: {cfg['semester_id']} (state_version={cfg['state_version']}, sync_policy={cfg['sync_policy']})")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"semester_id={cfg['semester_id']}\n")
+              out.write(f"google_sheet_id={cfg['google_sheet_id']}\n")
+              out.write(f"state_version={cfg['state_version']}\n")
+          PY
 
-      - name: Commit and Push Updated Data
+      - name: Rebuild Student SQLite Databases & Static Binaries
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          python rebuild_db.py --skip-static-gen
+          python rebuild_subjects.py
+          python generate_static_json.py
+
+      - name: Pre-Push TOCTOU Check and Push Static Data
+        id: push
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BUILT_SEMESTER_ID: ${{ steps.resolve.outputs.semester_id }}
+          EXPECTED_STATE_VERSION: ${{ steps.resolve.outputs.state_version }}
+        run: |
+          TOCTOU_STATUS="$(python - <<'PY'
+          import os, config
+          active = config.get_active_semester_config()
+          built_sem = os.environ["BUILT_SEMESTER_ID"]
+          expected_ver = int(os.environ["EXPECTED_STATE_VERSION"])
+          if active["semester_id"] != built_sem or int(active["state_version"]) != expected_ver:
+              print("ABORT")
+          else:
+              print("OK")
+          PY
+          )"
+          if [ "$TOCTOU_STATUS" != "OK" ]; then
+            echo "TOCTOU state changed mid-build for $BUILT_SEMESTER_ID (v$EXPECTED_STATE_VERSION); aborting push cleanly."
+            echo "toctou_aborted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "toctou_aborted=false" >> "$GITHUB_OUTPUT"
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add frontend/data/ *.db
-          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: sync timetable static data from Google Sheets" && git push)
+          git add -A frontend/data/ *.db
+          if ! (git diff --quiet && git diff --staged --quiet); then
+            git commit -m "auto: publish student timetable data for ${BUILT_SEMESTER_ID}"
+            git pull --rebase -X theirs origin main
+            git push
+          fi
+
+      - name: Send Signed Student Sync Callback (SYNCED)
+        if: success() && steps.push.outputs.toctou_aborted != 'true'
+        env:
+          CI: 'true'
+          SEMESTER_ID: ${{ steps.resolve.outputs.semester_id }}
+          STATE_VERSION: ${{ steps.resolve.outputs.state_version }}
+          SYNC_CALLBACK_SECRET: ${{ secrets.SYNC_CALLBACK_SECRET }}
+          PORTAL_CALLBACK_URL: ${{ secrets.PORTAL_CALLBACK_URL }}
+        run: |
+          python - <<'PY'
+          import os
+          from sync_faculty_to_supabase import send_sync_callback
+          send_sync_callback(
+              action="student_sync_callback",
+              semester_id=os.environ["SEMESTER_ID"],
+              state_version=int(os.environ["STATE_VERSION"]),
+              status="SYNCED",
+              error_message=None,
+              portal_callback_url=os.environ["PORTAL_CALLBACK_URL"],
+              callback_secret=os.environ["SYNC_CALLBACK_SECRET"],
+          )
+          PY
+
+      - name: Send Signed Student Sync Callback (FAILED)
+        if: failure()
+        env:
+          CI: 'true'
+          RESOLVED_SEMESTER_ID: ${{ steps.resolve.outputs.semester_id }}
+          RESOLVED_STATE_VERSION: ${{ steps.resolve.outputs.state_version }}
+          PAYLOAD_SEMESTER_ID: ${{ github.event.client_payload.semester_id }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SYNC_CALLBACK_SECRET: ${{ secrets.SYNC_CALLBACK_SECRET }}
+          PORTAL_CALLBACK_URL: ${{ secrets.PORTAL_CALLBACK_URL }}
+        run: |
+          python - <<'PY'
+          import hashlib, hmac, json, os, time, urllib.request
+          sem_id = os.environ.get("RESOLVED_SEMESTER_ID", "").strip() or os.environ.get("PAYLOAD_SEMESTER_ID", "").strip()
+          state_ver = os.environ.get("RESOLVED_STATE_VERSION", "").strip()
+          cb_url = os.environ.get("PORTAL_CALLBACK_URL", "").strip().rstrip("/")
+          cb_sec = os.environ.get("SYNC_CALLBACK_SECRET", "").strip()
+          if not state_ver and sem_id and os.environ.get("DATABASE_URL"):
+              try:
+                  import psycopg2
+                  with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute("SELECT state_version FROM public.semesters WHERE id = %s;", (sem_id,))
+                          row = cur.fetchone()
+                          if row:
+                              state_ver = str(row[0])
+              except Exception as exc:
+                  print(f"Warning: could not resolve fallback state_version: {exc}")
+          if not (sem_id and state_ver and cb_url and cb_sec):
+              raise SystemExit(0)
+          body = json.dumps({
+              "semester_id": sem_id,
+              "state_version": int(state_ver),
+              "status": "FAILED",
+              "error_message": "Student portal build or deploy failed in GitHub Actions",
+          }, separators=(",", ":"))
+          ts = str(int(time.time()))
+          sig = hmac.new(cb_sec.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              f"{cb_url}/api/semesters?action=student_sync_callback",
+              data=body.encode("utf-8"),
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Timestamp": ts,
+                  "X-Signature": f"sha256={sig}",
+              },
+          )
+          urllib.request.urlopen(req, timeout=20).read()
+          PY
+
+  sheet-updated:
+    if: (github.event_name == 'repository_dispatch' && github.event.action == 'sheet_updated') || (github.event_name == 'workflow_dispatch' && inputs.mode != 'publish_student_semester')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: student-portal-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Google OAuth Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_TOKEN: ${{ secrets.GOOGLE_TOKEN }}
+        run: |
+          printf '%s\n' "$GOOGLE_CREDENTIALS" > credentials.json
+          printf '%s\n' "$GOOGLE_TOKEN" > token.json
+
+      - name: Check Sync Policy & Resolve Active Semester
+        id: resolve
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import os, config
+          cfg = config.get_active_semester_config()
+          paused = cfg.get("sync_policy") != "AUTO_ENABLED"
+          if paused:
+              print(f"Auto sync paused for '{cfg['semester_id']}' (sync_policy={cfg.get('sync_policy')}); skipping.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"skip_sync={'true' if paused else 'false'}\n")
+              out.write(f"semester_id={cfg['semester_id']}\n")
+              out.write(f"state_version={cfg['state_version']}\n")
+          PY
+
+      - name: Rebuild SQLite Databases & Static Binaries
+        if: steps.resolve.outputs.skip_sync != 'true'
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python rebuild_db.py --skip-static-gen
+          python rebuild_subjects.py
+          python generate_static_json.py
+
+      - name: Pre-Push TOCTOU Verification & Commit Updated Data
+        id: push
+        if: steps.resolve.outputs.skip_sync != 'true'
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BUILT_SEMESTER_ID: ${{ steps.resolve.outputs.semester_id }}
+          EXPECTED_STATE_VERSION: ${{ steps.resolve.outputs.state_version }}
+        run: |
+          TOCTOU_STATUS="$(python - <<'PY'
+          import os, config
+          active = config.get_active_semester_config()
+          built_sem = os.environ["BUILT_SEMESTER_ID"]
+          expected_ver = int(os.environ["EXPECTED_STATE_VERSION"])
+          if (
+              active["semester_id"] != built_sem
+              or int(active["state_version"]) != expected_ver
+              or active.get("sync_policy") != "AUTO_ENABLED"
+          ):
+              print("ABORT")
+          else:
+              print("OK")
+          PY
+          )"
+          if [ "$TOCTOU_STATUS" != "OK" ]; then
+            echo "TOCTOU state or sync_policy changed mid-build for $BUILT_SEMESTER_ID (v$EXPECTED_STATE_VERSION); aborting push cleanly."
+            echo "toctou_aborted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "toctou_aborted=false" >> "$GITHUB_OUTPUT"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A frontend/data/ *.db
+          if ! (git diff --quiet && git diff --staged --quiet); then
+            git commit -m "auto: sync timetable static data from Google Sheets"
+            git pull --rebase -X theirs origin main
+            git push
+          fi
+
+      - name: Sync Faculty Schedules to Supabase
+        if: steps.resolve.outputs.skip_sync != 'true' && steps.push.outputs.toctou_aborted != 'true'
+        env:
+          CI: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python sync_faculty_to_supabase.py --mode sync --semester-id auto

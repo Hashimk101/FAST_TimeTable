@@ -41,7 +41,15 @@ credentials.json
 token.json
 fast-timetable-sync-09f3e092601a.json
 
+# Internal agent specifications, directives & postmortems
+TIMETABLE_MAKER_UPSTREAM_DIRECTIVE*.md
+AGENT_TASK_SPECIFICATION.md
+COMPREHENSIVE_SYSTEM_ISSUES_SPECIFICATION.md
+UI_DOCUMENTATION.md
 MIGRATION_AUTO_SYNC_POSTMORTEM.md
+*_SPECIFICATION.md
+*_DIRECTIVE*.md
+*_POSTMORTEM.md
 
 # Sensitive Course Allocation spreadsheets & Excel files - NEVER commit
 *.xlsx

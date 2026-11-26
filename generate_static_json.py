@@ -6,10 +6,11 @@ import re
 import time
 from datetime import datetime, timezone
 
-SUBJECTS_DB = 'subjects.db'
-COURSE_DB = 'uni_timetable.db'
-LAB_DB = 'uni_timetable_lab.db'
-OUTPUT_DIR = os.path.join('frontend', 'data')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SUBJECTS_DB = os.path.join(BASE_DIR, 'subjects.db')
+COURSE_DB = os.path.join(BASE_DIR, 'uni_timetable.db')
+LAB_DB = os.path.join(BASE_DIR, 'uni_timetable_lab.db')
+OUTPUT_DIR = os.path.join(BASE_DIR, 'frontend', 'data')
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
@@ -237,6 +238,15 @@ def generate_static_data():
                         combos.add((b, s or ''))
 
     print(f"Processing {len(combos)} batch/section combinations for schedules...")
+
+    # Wipe stale schedule binaries before writing the new semester's binaries
+    removed_bins = 0
+    for existing_name in os.listdir(schedules_dir):
+        if existing_name.endswith('.bin'):
+            os.remove(os.path.join(schedules_dir, existing_name))
+            removed_bins += 1
+    if removed_bins:
+        print(f"Removed {removed_bins} existing schedule .bin files before regeneration.")
 
     count = 0
     for batch_val, section_val in combos:

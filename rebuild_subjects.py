@@ -1,14 +1,23 @@
 import sqlite3
 import os
+from pathlib import Path
+from typing import Optional
 from sheets_subject_extractor import extract_subjects_and_batches_from_api
 
-DB_FILE = "subjects.db"
+BASE_DIR = Path(__file__).resolve().parent
+DB_FILE = str(BASE_DIR / "subjects.db")
+TIMETABLE_DBS = [
+    str(BASE_DIR / "uni_timetable.db"),
+    str(BASE_DIR / "uni_timetable_lab.db"),
+]
 
-def rebuild_subjects_db():
+def rebuild_subjects_db(spreadsheet_id: Optional[str] = None):
     print(f"Rebuilding {DB_FILE} from live Google Sheets API data...")
 
     # Extract live data from Google Sheets API
-    legend_batches, unique_subjects, batch_subject_links = extract_subjects_and_batches_from_api()
+    legend_batches, unique_subjects, batch_subject_links = extract_subjects_and_batches_from_api(
+        spreadsheet_id=spreadsheet_id
+    )
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -57,7 +66,7 @@ def rebuild_subjects_db():
     known_typos = {"comp wrch": "Comp Arch"}
 
     canonical_subjects_set = set()
-    for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
+    for db_file in TIMETABLE_DBS:
         if os.path.exists(db_file):
             try:
                 with sqlite3.connect(db_file) as c_conn:
@@ -121,7 +130,7 @@ def rebuild_subjects_db():
             batch_name_to_id[b_name] = row[0]
 
     # Authoritative Batch-Subject mappings directly from timetable databases
-    for db_file in ['uni_timetable.db', 'uni_timetable_lab.db']:
+    for db_file in TIMETABLE_DBS:
         if os.path.exists(db_file):
             try:
                 with sqlite3.connect(db_file) as c_conn:

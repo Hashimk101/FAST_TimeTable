@@ -1,8 +1,14 @@
 import re
 from collections import OrderedDict
-from databaseHandler import get_sheets_service, days_of_week, get_day_sheet_mapping
+from typing import Optional
 
-SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
+from config import get_active_spreadsheet_id
+from databaseHandler import (
+    days_of_week,
+    execute_google_api_call,
+    get_day_sheet_mapping,
+    get_sheets_service,
+)
 
 def normalize_color(color_dict: dict) -> tuple:
     """Converts Google Sheets API backgroundColor float dict (0.0-1.0) to RGB tuple (0-255)."""
@@ -60,25 +66,36 @@ def parse_batch_name(raw_name: str) -> str:
         return f"BS{year_str} {disc}".strip()
     return ""
 
-def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
+def extract_subjects_and_batches_from_api(spreadsheet_id: Optional[str] = None):
     """
     Reads grid data from Google Sheets API, extracts legend batch colors from rows 1-4,
     gathers all scheduled subjects using an O(n) hashmap method (splitting before '('),
     and maps each subject to its offering batch(es) based on cell color matching.
     """
+    _, resolved_sheet_id = get_active_spreadsheet_id(override_id=spreadsheet_id)
     service = get_sheets_service()
-    sheet_mapping = get_day_sheet_mapping(service, spreadsheet_id, refresh=True)
+    sheet_mapping = get_day_sheet_mapping(service, resolved_sheet_id, refresh=True)
     ranges_to_fetch = [sheet_mapping[d] for d in days_of_week if d in sheet_mapping]
+    if not ranges_to_fetch:
+        raise RuntimeError(
+            f"SHEET_STRUCTURE_INVALID: No visible day sheets found in spreadsheet '{resolved_sheet_id}'."
+        )
     print(f"Fetching grid data for ranges: {ranges_to_fetch}...")
-    
+
     # Request grid data for all active/visible day sheets
-    response = service.spreadsheets().get(
-        spreadsheetId=spreadsheet_id,
-        ranges=ranges_to_fetch,
-        includeGridData=True
-    ).execute()
+    response = execute_google_api_call(
+        lambda: service.spreadsheets().get(
+            spreadsheetId=resolved_sheet_id,
+            ranges=ranges_to_fetch,
+            includeGridData=True,
+        ).execute()
+    )
 
     sheets = response.get('sheets', [])
+    if not sheets:
+        raise RuntimeError(
+            f"SHEET_STRUCTURE_INVALID: Google Sheets returned no sheets for '{resolved_sheet_id}'."
+        )
 
     # Step 1: Extract Legend Batch Colors from rows 1-4 of the Monday sheet
     # Legend structure: (Batch Name, RGB Tuple, Hex String)
@@ -94,7 +111,10 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
         monday_sheet = sheets[0]
 
     if monday_sheet:
-        monday_data = monday_sheet['data'][0].get('rowData', [])
+        monday_grid_list = monday_sheet.get('data') or []
+        if not monday_grid_list:
+            raise RuntimeError("SHEET_STRUCTURE_INVALID: Empty grid data in legend sheet.")
+        monday_data = monday_grid_list[0].get('rowData', [])
         # Rows 1 to 4 (index 0 to 3)
         for row_idx in range(min(4, len(monday_data))):
             row_cells = monday_data[row_idx].get('values', [])
@@ -150,7 +170,10 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: str = SPREADSHEET_ID):
 
     for sheet in sheets:
         sheet_title = sheet['properties']['title']
-        grid = sheet['data'][0].get('rowData', [])
+        sheet_data_list = sheet.get('data') or []
+        if not sheet_data_list:
+            raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Empty grid data in sheet '{sheet_title}'.")
+        grid = sheet_data_list[0].get('rowData', [])
 
         # Process grid rows starting after the header (row index 4 onwards)
         for r_idx in range(4, len(grid)):

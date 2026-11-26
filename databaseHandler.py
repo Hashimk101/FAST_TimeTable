@@ -1,14 +1,24 @@
 import sqlite3
+import time
+from pathlib import Path
 import pandas as pd
 from pandas import DataFrame, Series
 import numpy as np
 import os.path
 import re
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 import sheets_to_df
+
+BASE_DIR = Path(__file__).resolve().parent
+TOKEN_PATH = BASE_DIR / "token.json"
+CREDENTIALS_PATH = BASE_DIR / "credentials.json"
+RETRYABLE_GOOGLE_HTTP_STATUS = {429, 500, 503}
+GOOGLE_RETRY_DELAYS_SEC = (2, 6)
 
 # list of working days
 days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
@@ -685,19 +695,76 @@ def insert_timetable(clean_df: DataFrame, day: str, db_name: str = 'uni_timetabl
         conn.close()
 
 
-def get_sheets_service():
+def _extract_http_status(exc: Exception) -> int | None:
+    """Extracts numeric HTTP status code from googleapiclient HttpError or test mocks."""
+    resp = getattr(exc, "resp", None)
+    status = getattr(resp, "status", None) if resp is not None else getattr(exc, "status_code", None)
+    try:
+        return int(status) if status is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def execute_google_api_call(request_fn, sleep_fn=time.sleep):
+    """
+    Executes a Google API `.execute()` callable with bounded exponential backoff
+    (3 total attempts: waits 2s then 6s) on HTTP 429/500/503, and fails immediately
+    with SHEET_ACCESS_DENIED on HTTP 401/403/404.
+    """
+    max_attempts = len(GOOGLE_RETRY_DELAYS_SEC) + 1
+    for attempt in range(max_attempts):
+        try:
+            return request_fn()
+        except HttpError as exc:
+            status = _extract_http_status(exc)
+            if status in (401, 403, 404):
+                raise RuntimeError(
+                    f"SHEET_ACCESS_DENIED: Google Sheets API returned HTTP {status}: {exc}"
+                ) from exc
+            if status in RETRYABLE_GOOGLE_HTTP_STATUS and attempt < max_attempts - 1:
+                delay = GOOGLE_RETRY_DELAYS_SEC[attempt]
+                print(f"[WARN] Google API transient HTTP {status}; retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_fn(delay)
+                continue
+            raise
+
+
+def get_sheets_service(token_path=None, credentials_path=None):
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    is_ci = os.environ.get("CI", "").strip().lower() == "true"
+    tok_path = Path(token_path) if token_path is not None else TOKEN_PATH
+    cred_path = Path(credentials_path) if credentials_path is not None else CREDENTIALS_PATH
+
     creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', scopes)
+    if tok_path.exists():
+        creds = Credentials.from_authorized_user_file(str(tok_path), scopes)
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', scopes)
+            try:
+                creds.refresh(Request())
+            except RefreshError as exc:
+                if is_ci:
+                    raise RuntimeError(
+                        f"OAUTH_TOKEN_EXPIRED: Google OAuth token refresh failed in CI: {exc}"
+                    ) from exc
+                creds = None
+
+        if not creds or not creds.valid:
+            if is_ci:
+                raise RuntimeError(
+                    "OAUTH_TOKEN_EXPIRED: Missing, invalid, or expired Google OAuth token in CI; interactive OAuth is disabled."
+                )
+            if not cred_path.exists():
+                raise RuntimeError(
+                    f"OAUTH_TOKEN_EXPIRED: Missing Google OAuth credentials file at '{cred_path}'."
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), scopes)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
+
+        with open(tok_path, 'w', encoding='utf-8') as token:
             token.write(creds.to_json())
+
     return build('sheets', 'v4', credentials=creds)
 
 _day_sheet_cache = {}
@@ -712,7 +779,9 @@ def get_day_sheet_mapping(service, spreadsheet_id: str, refresh: bool = False) -
     if not refresh and spreadsheet_id in _day_sheet_cache:
         return _day_sheet_cache[spreadsheet_id]
 
-    meta = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    meta = execute_google_api_call(
+        lambda: service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    )
     sheets = meta.get('sheets', [])
     
     # 1. Filter visible sheets only (hidden sheets do not count)
@@ -749,15 +818,23 @@ def get_day_sheet_mapping(service, spreadsheet_id: str, refresh: bool = False) -
 
 def get_raw_sheet(service, spreadsheet_id, sheet_name):
     sheet = service.spreadsheets()
-    result = sheet.get(
-        spreadsheetId=spreadsheet_id, 
-        ranges=[sheet_name],
-        includeGridData=True
-    ).execute()
+    result = execute_google_api_call(
+        lambda: sheet.get(
+            spreadsheetId=spreadsheet_id,
+            ranges=[sheet_name],
+            includeGridData=True,
+        ).execute()
+    )
     sheets = result.get('sheets', [])
-    if sheets:
-        return sheets[0].get('data', [])[0].get('rowData', [])
-    return []
+    if not sheets:
+        raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Sheet '{sheet_name}' missing from API response.")
+    grid_data = sheets[0].get('data') or []
+    if not grid_data:
+        raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Empty grid data in sheet '{sheet_name}'.")
+    row_data = grid_data[0].get('rowData') or []
+    if not row_data:
+        raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Empty rowData in sheet '{sheet_name}'.")
+    return row_data
 
 def read_and_clean_classroom_df(service, spreadsheet_id: str, sheet_name: str) -> DataFrame:
     """Read and clean classroom timetable from Google Sheets."""

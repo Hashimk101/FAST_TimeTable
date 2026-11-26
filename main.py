@@ -1,64 +1,27 @@
-from databaseHandler import (
-    days_of_week,
-    make_database,
-    insert_timetable,
-    read_and_clean_classroom_df,
-    read_and_clean_lab_df,
-    fetch_timetable_for_section,
-    get_sheets_service,
-    get_day_sheet_mapping
-)
+from pathlib import Path
+from typing import Optional
 
-from main_menu import (
-    main_menu
-)
+from config import get_active_spreadsheet_id
+from rebuild_db import build_sqlite_from_google_sheet
 
-SPREADSHEET_ID = "1vlTuotLw34fedME3gNQj09cZw-todVomxAiu5P1wZ6Q"
+BASE_DIR = Path(__file__).resolve().parent
+COURSE_DATABASE = str(BASE_DIR / "uni_timetable.db")
+LAB_DATABASE = str(BASE_DIR / "uni_timetable_lab.db")
 
-COURSE_DATABASE = "uni_timetable.db"
-LAB_DATABASE = "uni_timetable_lab.db"
 
-def main():
-    # 1. Create databases and get timetable data from google sheets
-    make_database(COURSE_DATABASE, 'CLASSROOM')
-    make_database(LAB_DATABASE, 'LAB')
-    
-    service = get_sheets_service()
-    sheet_mapping = get_day_sheet_mapping(service, SPREADSHEET_ID, refresh=True)
-    print(f"Discovered day sheet mapping (hidden sheets skipped): {sheet_mapping}")
-
-    for day in days_of_week:
-        if day not in sheet_mapping:
-            print(f"Skipping {day}: No visible/active sheet found.")
-            continue
-
-        actual_sheet = sheet_mapping[day]
-        try:
-            # classroom setup
-            clean_df = read_and_clean_classroom_df(service, SPREADSHEET_ID, actual_sheet)
-            insert_timetable(clean_df, day, COURSE_DATABASE, 'Room', 'CLASSROOM')
-            print(f"Inserted classroom timetable for {day} (from sheet '{actual_sheet}')")
-            
-            # lab setup
-            clean_dflab = read_and_clean_lab_df(service, SPREADSHEET_ID, actual_sheet)
-            insert_timetable(clean_dflab, day, LAB_DATABASE, 'Lab', 'LAB')
-            print(f"Inserted lab timetable for {day} (from sheet '{actual_sheet}')")
-
-        except Exception as e:
-            print(f"Error processing {day} (sheet '{actual_sheet}'): {e}")
-
-    from databaseHandler import correct_typos_in_db
-    correct_typos_in_db(COURSE_DATABASE)
-    correct_typos_in_db(LAB_DATABASE)
+def main(spreadsheet_id: Optional[str] = None):
+    # 1. Resolve spreadsheet ID dynamically at call time and build databases
+    _, resolved_sheet_id = get_active_spreadsheet_id(override_id=spreadsheet_id)
+    build_sqlite_from_google_sheet(
+        resolved_sheet_id,
+        course_db=COURSE_DATABASE,
+        lab_db=LAB_DATABASE,
+    )
 
     print("\nDatabase creation complete!")
-    print("- Classroom timetable: uni_timetable.db")
-    print("- Lab timetable: uni_timetable_lab.db")
-
-
-
+    print(f"- Classroom timetable: {COURSE_DATABASE}")
+    print(f"- Lab timetable: {LAB_DATABASE}")
 
 
 if __name__ == "__main__":
-    # 1. build the database
     main()
