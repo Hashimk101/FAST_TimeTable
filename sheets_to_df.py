@@ -76,16 +76,28 @@ def _normalize_evening_batch_name(raw_name: str) -> str:
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean
 
+def _find_first_room_header_row(row_data: list) -> int:
+    """Returns the row index of the first 'Room' header row, or len(row_data) if absent."""
+    for idx, row in enumerate(row_data[:10]):
+        cells = row.get('values', [])
+        for cell in cells:
+            val = str(cell.get('formattedValue') or '').strip()
+            if re.search(r'\broom\b', val, re.IGNORECASE):
+                return idx
+    return len(row_data)
+
+
 def _extract_evening_legend(row_data: list, evening_start_col: int) -> dict:
     evening_legend = dict(STATIC_EVENING_LEGEND)
     if evening_start_col == float('inf'):
         return evening_legend
 
-    for row_idx in range(min(5, len(row_data))):
+    legend_end_row = min(_find_first_room_header_row(row_data), 5, len(row_data))
+    for row_idx in range(legend_end_row):
         cells = row_data[row_idx].get('values', [])
         for col_idx in range(min(int(evening_start_col), len(cells)), len(cells)):
             cell = cells[col_idx]
-            val = str(cell.get('formattedValue', '')).strip()
+            val = str(cell.get('formattedValue') or '').strip()
             if not val or val in ["Room", "Lab"] or "TimeTable" in val or "FSC" in val:
                 continue
             if re.match(r'^\d{2}:\d{2}', val):
@@ -105,7 +117,7 @@ def _extract_legend(row_data: list) -> dict:
     for row_idx in range(min(4, len(row_data))):
         cells = row_data[row_idx].get('values', [])
         for cell in cells:
-            val = str(cell.get('formattedValue', '')).strip()
+            val = str(cell.get('formattedValue') or '').strip()
             if not val or val in ["Room", "Lab"] or "TimeTable" in val or "FSC" in val:
                 continue
             if re.match(r'^\d{2}:\d{2}', val):
@@ -131,7 +143,7 @@ def _find_evening_start_col(row_data: list) -> int:
         cells = row.get('values', [])
         room_cols = []
         for idx, cell in enumerate(cells):
-            val = str(cell.get('formattedValue', '')).strip()
+            val = str(cell.get('formattedValue') or '').strip()
             if re.search(r'\broom\b', val, re.IGNORECASE):
                 room_cols.append(idx)
         if len(room_cols) >= 2:
@@ -151,7 +163,7 @@ def _grid_to_dataframe(row_data: list) -> DataFrame:
         row_vals = []
         cells = row.get('values', [])
         for col_idx, cell in enumerate(cells):
-            val = str(cell.get('formattedValue', '')).strip()
+            val = str(cell.get('formattedValue') or '').strip()
             if val and val != "None":
                 fmt = cell.get('effectiveFormat', {})
                 bg = fmt.get('backgroundColor', {})

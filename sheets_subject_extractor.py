@@ -114,12 +114,12 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: Optional[str] = None):
         monday_grid_list = monday_sheet.get('data') or []
         if not monday_grid_list:
             raise RuntimeError("SHEET_STRUCTURE_INVALID: Empty grid data in legend sheet.")
-        monday_data = monday_grid_list[0].get('rowData', [])
+        monday_data = monday_grid_list[0].get('rowData') or []
         # Rows 1 to 4 (index 0 to 3)
         for row_idx in range(min(4, len(monday_data))):
-            row_cells = monday_data[row_idx].get('values', [])
+            row_cells = monday_data[row_idx].get('values') or []
             for cell in row_cells:
-                val = cell.get('formattedValue', '').strip()
+                val = str(cell.get('formattedValue') or '').strip()
                 if not val or val == "Room" or val == "Lab" or "TimeTable" in val or "FSC" in val:
                     continue
                 
@@ -169,19 +169,21 @@ def extract_subjects_and_batches_from_api(spreadsheet_id: Optional[str] = None):
     }
 
     for sheet in sheets:
-        sheet_title = sheet['properties']['title']
+        sheet_title = (sheet.get('properties') or {}).get('title', 'Unknown')
         sheet_data_list = sheet.get('data') or []
         if not sheet_data_list:
             raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Empty grid data in sheet '{sheet_title}'.")
-        grid = sheet_data_list[0].get('rowData', [])
+        grid = sheet_data_list[0].get('rowData') or []
+        if not grid:
+            raise RuntimeError(f"SHEET_STRUCTURE_INVALID: Empty rowData in sheet '{sheet_title}'.")
 
         # Process grid rows starting after the header (row index 4 onwards)
         for r_idx in range(4, len(grid)):
-            row_cells = grid[r_idx].get('values', [])
+            row_cells = grid[r_idx].get('values') or []
             for c_idx, cell in enumerate(row_cells):
                 if c_idx == 0:
                     continue
-                raw_val = cell.get('formattedValue', '').strip()
+                raw_val = str(cell.get('formattedValue') or '').strip()
                 if not raw_val or raw_val.lower() in ignore_keywords:
                     continue
                 

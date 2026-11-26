@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -86,7 +87,7 @@ def generate_static_data():
     print("Generating static binary data files...")
 
     # 1. Batches (All batches: BS, MS, PhD)
-    with sqlite3.connect(SUBJECTS_DB) as conn:
+    with closing(sqlite3.connect(SUBJECTS_DB)) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, color_hex FROM batches ORDER BY id ASC")
         batches_rows = cursor.fetchall()
@@ -174,7 +175,7 @@ def generate_static_data():
         for db_path in [COURSE_DB, LAB_DB]:
             if not os.path.exists(db_path):
                 continue
-            with sqlite3.connect(db_path) as t_conn:
+            with closing(sqlite3.connect(db_path)) as t_conn:
                 t_cur = t_conn.cursor()
                 t_cur.execute("""
                     SELECT DISTINCT SUBJECT, SECTION 
@@ -220,7 +221,7 @@ def generate_static_data():
     for db_path in [COURSE_DB, LAB_DB]:
         if not os.path.exists(db_path):
             continue
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT DISTINCT BATCH, SECTION FROM timetable WHERE BATCH IS NOT NULL")
             for row in cursor.fetchall():
@@ -243,8 +244,10 @@ def generate_static_data():
     removed_bins = 0
     for existing_name in os.listdir(schedules_dir):
         if existing_name.endswith('.bin'):
-            os.remove(os.path.join(schedules_dir, existing_name))
-            removed_bins += 1
+            candidate_path = os.path.join(schedules_dir, existing_name)
+            if os.path.isfile(candidate_path):
+                os.remove(candidate_path)
+                removed_bins += 1
     if removed_bins:
         print(f"Removed {removed_bins} existing schedule .bin files before regeneration.")
 
@@ -259,7 +262,7 @@ def generate_static_data():
             for db_path, loc_col in [(COURSE_DB, 'CLASSROOM'), (LAB_DB, 'LAB')]:
                 if not os.path.exists(db_path):
                     continue
-                with sqlite3.connect(db_path) as conn:
+                with closing(sqlite3.connect(db_path)) as conn:
                     cursor = conn.cursor()
                     if str(batch_val).startswith('MS') and batch_val != 'MS Electives (All Prgrms)':
                         # Bundle MS batch core courses AND open MS electives into the schedule binary
@@ -371,20 +374,21 @@ def generate_static_data():
     }
     
     # 1. Collect Block C & D rooms from theory classrooms
-    with sqlite3.connect(COURSE_DB) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND CLASSROOM IS NOT NULL")
-        for r in cur.fetchall():
-            room_code = r[0].strip()
-            # Exclude Block C Floor 1 (administration / faculty rooms)
-            if re.match(r'^C-1\d{2}', room_code, re.IGNORECASE):
-                continue
-            if room_code and room_code not in rooms_data["rooms"]:
-                rooms_data["rooms"].append(room_code)
+    if os.path.exists(COURSE_DB):
+        with closing(sqlite3.connect(COURSE_DB)) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT CLASSROOM FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND CLASSROOM IS NOT NULL")
+            for r in cur.fetchall():
+                room_code = r[0].strip()
+                # Exclude Block C Floor 1 (administration / faculty rooms)
+                if re.match(r'^C-1\d{2}', room_code, re.IGNORECASE):
+                    continue
+                if room_code and room_code not in rooms_data["rooms"]:
+                    rooms_data["rooms"].append(room_code)
 
     # 2. Collect Block C & D rooms from lab locations (e.g. "Rawal 3-GPU (C-511)" -> "C-511")
     if os.path.exists(LAB_DB):
-        with sqlite3.connect(LAB_DB) as conn:
+        with closing(sqlite3.connect(LAB_DB)) as conn:
             cur = conn.cursor()
             cur.execute("SELECT DISTINCT LAB FROM timetable WHERE LAB IS NOT NULL")
             for r in cur.fetchall():
@@ -403,17 +407,18 @@ def generate_static_data():
             rooms_data["occupied"][d][r] = []
             
     # 3. Populate theory occupancy
-    with sqlite3.connect(COURSE_DB) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT DAY, CLASSROOM, START_TIME, END_TIME FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND START_TIME IS NOT NULL AND END_TIME IS NOT NULL AND START_TIME != '' AND END_TIME != ''")
-        for day, room, start, end in cur.fetchall():
-            room_code = (room or '').strip()
-            if day in rooms_data["occupied"] and room_code in rooms_data["occupied"][day]:
-                rooms_data["occupied"][day][room_code].append({"s": start, "e": end})
+    if os.path.exists(COURSE_DB):
+        with closing(sqlite3.connect(COURSE_DB)) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DAY, CLASSROOM, START_TIME, END_TIME FROM timetable WHERE (CLASSROOM LIKE 'C-%' OR CLASSROOM LIKE 'D-%') AND START_TIME IS NOT NULL AND END_TIME IS NOT NULL AND START_TIME != '' AND END_TIME != ''")
+            for day, room, start, end in cur.fetchall():
+                room_code = (room or '').strip()
+                if day in rooms_data["occupied"] and room_code in rooms_data["occupied"][day]:
+                    rooms_data["occupied"][day][room_code].append({"s": start, "e": end})
 
     # 4. Populate lab occupancy
     if os.path.exists(LAB_DB):
-        with sqlite3.connect(LAB_DB) as conn:
+        with closing(sqlite3.connect(LAB_DB)) as conn:
             cur = conn.cursor()
             cur.execute("SELECT DAY, LAB, START_TIME, END_TIME FROM timetable WHERE LAB IS NOT NULL AND START_TIME IS NOT NULL AND END_TIME IS NOT NULL AND START_TIME != '' AND END_TIME != ''")
             for day, lab, start, end in cur.fetchall():
@@ -433,27 +438,28 @@ def generate_static_data():
     blocks_floors = {}
     ann_schedule = { d: [] for d in DAYS_OF_WEEK }
 
-    with sqlite3.connect(COURSE_DB) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT DAY, START_TIME, END_TIME, SUBJECT, CLASSROOM, SECTION, BATCH FROM timetable WHERE CLASSROOM IS NOT NULL AND CLASSROOM != ''")
-        for day, start, end, subject, classroom, section, batch in cur.fetchall():
-            if day not in ann_schedule or not start or not end:
-                continue
-            block, floor, room_code, display_name = parse_room_location(classroom, is_lab=False)
-            if not block:
-                continue
-            disc, clean_sec = parse_discipline(batch, section)
-            if block not in blocks_floors:
-                blocks_floors[block] = set()
-            blocks_floors[block].add(floor)
-            ann_schedule[day].append({
-                "b": block, "f": floor, "r": room_code, "n": display_name, "lab": 0,
-                "s": start, "e": end, "sub": subject or "",
-                "bt": batch or "", "disc": disc or "", "sec": clean_sec or section or ""
-            })
+    if os.path.exists(COURSE_DB):
+        with closing(sqlite3.connect(COURSE_DB)) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT DAY, START_TIME, END_TIME, SUBJECT, CLASSROOM, SECTION, BATCH FROM timetable WHERE CLASSROOM IS NOT NULL AND CLASSROOM != ''")
+            for day, start, end, subject, classroom, section, batch in cur.fetchall():
+                if day not in ann_schedule or not start or not end:
+                    continue
+                block, floor, room_code, display_name = parse_room_location(classroom, is_lab=False)
+                if not block:
+                    continue
+                disc, clean_sec = parse_discipline(batch, section)
+                if block not in blocks_floors:
+                    blocks_floors[block] = set()
+                blocks_floors[block].add(floor)
+                ann_schedule[day].append({
+                    "b": block, "f": floor, "r": room_code, "n": display_name, "lab": 0,
+                    "s": start, "e": end, "sub": subject or "",
+                    "bt": batch or "", "disc": disc or "", "sec": clean_sec or section or ""
+                })
 
     if os.path.exists(LAB_DB):
-        with sqlite3.connect(LAB_DB) as conn:
+        with closing(sqlite3.connect(LAB_DB)) as conn:
             cur = conn.cursor()
             cur.execute("SELECT DAY, START_TIME, END_TIME, SUBJECT, LAB, SECTION, BATCH FROM timetable WHERE LAB IS NOT NULL AND LAB != ''")
             for day, start, end, subject, lab, section, batch in cur.fetchall():

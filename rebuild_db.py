@@ -4,8 +4,11 @@ This is just the DB rebuild portion of main.py, without the interactive menu.
 """
 
 import argparse
-from pathlib import Path
+import os
 import sqlite3
+import tempfile
+from contextlib import closing
+from pathlib import Path
 from typing import Optional
 
 from config import get_active_spreadsheet_id
@@ -32,11 +35,8 @@ def build_sqlite_from_google_sheet(
 ) -> dict:
     """
     Fetches all visible day sheets from Google Sheets API and populates `course_db`
-    and `lab_db`. Fails loudly on missing day sheets or per-day parsing errors.
+    and `lab_db` atomically via staged temp files so failures never destroy existing DBs.
     """
-    make_database(course_db, "CLASSROOM")
-    make_database(lab_db, "LAB")
-
     service = get_sheets_service()
     sheet_mapping = get_day_sheet_mapping(service, spreadsheet_id, refresh=True)
     print(f"Discovered day sheet mapping (hidden sheets skipped): {sheet_mapping}")
@@ -47,37 +47,61 @@ def build_sqlite_from_google_sheet(
             f"SHEET_STRUCTURE_INVALID: No visible day sheets found in spreadsheet '{spreadsheet_id}'."
         )
 
-    for day in days_of_week:
-        if day not in sheet_mapping:
-            print(f"Skipping {day}: No visible/active sheet found.")
-            continue
+    course_path = Path(course_db)
+    lab_path = Path(lab_db)
+    course_path.parent.mkdir(parents=True, exist_ok=True)
+    lab_path.parent.mkdir(parents=True, exist_ok=True)
 
-        actual_sheet = sheet_mapping[day]
-        try:
-            clean_df = read_and_clean_classroom_df(service, spreadsheet_id, actual_sheet)
-            insert_timetable(clean_df, day, course_db, "Room", "CLASSROOM")
-            print(f"Inserted classroom timetable for {day} (from sheet '{actual_sheet}')")
+    fd_c, tmp_course_db = tempfile.mkstemp(prefix=".tmp_course_", suffix=".db", dir=str(course_path.parent))
+    os.close(fd_c)
+    fd_l, tmp_lab_db = tempfile.mkstemp(prefix=".tmp_lab_", suffix=".db", dir=str(lab_path.parent))
+    os.close(fd_l)
 
-            clean_dflab = read_and_clean_lab_df(service, spreadsheet_id, actual_sheet)
-            insert_timetable(clean_dflab, day, lab_db, "Lab", "LAB")
-            print(f"Inserted lab timetable for {day} (from sheet '{actual_sheet}')")
-        except Exception as exc:
-            print(f"Error processing {day} (sheet '{actual_sheet}'): {exc}")
-            raise
+    try:
+        make_database(tmp_course_db, "CLASSROOM")
+        make_database(tmp_lab_db, "LAB")
 
-    print("\nApplying fuzzy matching to correct typos...")
-    correct_typos_in_db(course_db)
-    correct_typos_in_db(lab_db)
+        for day in days_of_week:
+            if day not in sheet_mapping:
+                print(f"Skipping {day}: No visible/active sheet found.")
+                continue
 
-    with sqlite3.connect(course_db) as conn_t:
-        theory_count = conn_t.execute("SELECT COUNT(*) FROM timetable").fetchone()[0]
-    with sqlite3.connect(lab_db) as conn_l:
-        lab_count = conn_l.execute("SELECT COUNT(*) FROM timetable").fetchone()[0]
+            actual_sheet = sheet_mapping[day]
+            try:
+                clean_df = read_and_clean_classroom_df(service, spreadsheet_id, actual_sheet)
+                insert_timetable(clean_df, day, tmp_course_db, "Room", "CLASSROOM")
+                print(f"Inserted classroom timetable for {day} (from sheet '{actual_sheet}')")
 
-    if theory_count + lab_count == 0:
-        raise RuntimeError(
-            f"SHEET_STRUCTURE_INVALID: Parsed 0 timetable slots from spreadsheet '{spreadsheet_id}'."
-        )
+                clean_dflab = read_and_clean_lab_df(service, spreadsheet_id, actual_sheet)
+                insert_timetable(clean_dflab, day, tmp_lab_db, "Lab", "LAB")
+                print(f"Inserted lab timetable for {day} (from sheet '{actual_sheet}')")
+            except Exception as exc:
+                print(f"Error processing {day} (sheet '{actual_sheet}'): {exc}")
+                raise
+
+        print("\nApplying fuzzy matching to correct typos...")
+        correct_typos_in_db(tmp_course_db)
+        correct_typos_in_db(tmp_lab_db)
+
+        with closing(sqlite3.connect(tmp_course_db)) as conn_t:
+            theory_count = conn_t.execute("SELECT COUNT(*) FROM timetable").fetchone()[0]
+        with closing(sqlite3.connect(tmp_lab_db)) as conn_l:
+            lab_count = conn_l.execute("SELECT COUNT(*) FROM timetable").fetchone()[0]
+
+        if theory_count + lab_count == 0:
+            raise RuntimeError(
+                f"SHEET_STRUCTURE_INVALID: Parsed 0 timetable slots from spreadsheet '{spreadsheet_id}'."
+            )
+
+        os.replace(tmp_course_db, course_db)
+        os.replace(tmp_lab_db, lab_db)
+    finally:
+        for leftover in (tmp_course_db, tmp_lab_db):
+            if os.path.exists(leftover):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
 
     return {
         "spreadsheet_id": spreadsheet_id,

@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from contextlib import closing
 from pathlib import Path
 from typing import Optional
 from sheets_subject_extractor import extract_subjects_and_batches_from_api
@@ -19,171 +20,170 @@ def rebuild_subjects_db(spreadsheet_id: Optional[str] = None):
         spreadsheet_id=spreadsheet_id
     )
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    with closing(sqlite3.connect(DB_FILE)) as conn:
+        cursor = conn.cursor()
 
-    # Enable foreign keys
-    cursor.execute("PRAGMA foreign_keys = ON;")
+        # Enable foreign keys
+        cursor.execute("PRAGMA foreign_keys = ON;")
 
-    # Destroy previous database tables completely
-    cursor.execute("DROP TABLE IF EXISTS batch_subjects;")
-    cursor.execute("DROP TABLE IF EXISTS subjects;")
-    cursor.execute("DROP TABLE IF EXISTS batches;")
+        # Destroy previous database tables completely
+        cursor.execute("DROP TABLE IF EXISTS batch_subjects;")
+        cursor.execute("DROP TABLE IF EXISTS subjects;")
+        cursor.execute("DROP TABLE IF EXISTS batches;")
 
-    # 1. Create Batches Table
-    cursor.execute("""
-        CREATE TABLE batches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            color_hex TEXT NOT NULL
-        );
-    """)
+        # 1. Create Batches Table
+        cursor.execute("""
+            CREATE TABLE batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                color_hex TEXT NOT NULL
+            );
+        """)
 
-    # 2. Create Subjects Table
-    cursor.execute("""
-        CREATE TABLE subjects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            short_name TEXT NOT NULL
-        );
-    """)
+        # 2. Create Subjects Table
+        cursor.execute("""
+            CREATE TABLE subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                short_name TEXT NOT NULL
+            );
+        """)
 
-    # 3. Create Batch_Subjects Mapping Table
-    cursor.execute("""
-        CREATE TABLE batch_subjects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id INTEGER NOT NULL,
-            subject_id INTEGER NOT NULL,
-            FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
-            FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
-            UNIQUE(batch_id, subject_id)
-        );
-    """)
+        # 3. Create Batch_Subjects Mapping Table
+        cursor.execute("""
+            CREATE TABLE batch_subjects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                subject_id INTEGER NOT NULL,
+                FOREIGN KEY (batch_id) REFERENCES batches(id) ON DELETE CASCADE,
+                FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
+                UNIQUE(batch_id, subject_id)
+            );
+        """)
 
-    # --- FUZZY MATCHING SYNC ---
-    # Fetch canonical, typo-corrected subjects from both theory and lab timetable databases
-    import re
-    known_typos = {"comp wrch": "Comp Arch"}
+        # --- FUZZY MATCHING SYNC ---
+        # Fetch canonical, typo-corrected subjects from both theory and lab timetable databases
+        import re
+        known_typos = {"comp wrch": "Comp Arch"}
 
-    canonical_subjects_set = set()
-    for db_file in TIMETABLE_DBS:
-        if os.path.exists(db_file):
-            try:
-                with sqlite3.connect(db_file) as c_conn:
-                    c_cursor = c_conn.cursor()
-                    c_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable WHERE SUBJECT IS NOT NULL")
-                    for row in c_cursor.fetchall():
-                        s = (row[0] or '').strip()
-                        if not s:
-                            continue
-                        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s):
-                            continue
-                        if s.lower() in known_typos:
-                            s = known_typos[s.lower()]
-                        canonical_subjects_set.add(s)
-            except Exception as e:
-                print(f"Warning: Could not read canonical subjects from {db_file}: {e}")
-    canonical_subjects = list(canonical_subjects_set)
+        canonical_subjects_set = set()
+        for db_file in TIMETABLE_DBS:
+            if os.path.exists(db_file):
+                try:
+                    with closing(sqlite3.connect(db_file)) as c_conn:
+                        c_cursor = c_conn.cursor()
+                        c_cursor.execute("SELECT DISTINCT SUBJECT FROM timetable WHERE SUBJECT IS NOT NULL")
+                        for row in c_cursor.fetchall():
+                            s = (row[0] or '').strip()
+                            if not s:
+                                continue
+                            if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s):
+                                continue
+                            if s.lower() in known_typos:
+                                s = known_typos[s.lower()]
+                            canonical_subjects_set.add(s)
+                except Exception as e:
+                    print(f"Warning: Could not read canonical subjects from {db_file}: {e}")
+        canonical_subjects = list(canonical_subjects_set)
 
-    import difflib
-    corrected_unique_subjects = {}
-    for name, short in unique_subjects.items():
-        if name.lower() in known_typos:
-            name = known_typos[name.lower()]
-        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', name):
-            continue
-        if name not in canonical_subjects and canonical_subjects:
-            matches = difflib.get_close_matches(name, canonical_subjects, n=1, cutoff=0.85)
-            if matches:
-                print(f"  [FUZZY SYNC] '{name}' -> '{matches[0]}'")
-                name = matches[0]
-        # Keep the shortest 'short_name' if there are multiple due to merge
-        if name in corrected_unique_subjects:
-            if len(short) < len(corrected_unique_subjects[name]):
+        import difflib
+        corrected_unique_subjects = {}
+        for name, short in unique_subjects.items():
+            if name.lower() in known_typos:
+                name = known_typos[name.lower()]
+            if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', name):
+                continue
+            if name not in canonical_subjects and canonical_subjects:
+                matches = difflib.get_close_matches(name, canonical_subjects, n=1, cutoff=0.85)
+                if matches:
+                    print(f"  [FUZZY SYNC] '{name}' -> '{matches[0]}'")
+                    name = matches[0]
+            # Keep the shortest 'short_name' if there are multiple due to merge
+            if name in corrected_unique_subjects:
+                if len(short) < len(corrected_unique_subjects[name]):
+                    corrected_unique_subjects[name] = short
+            else:
                 corrected_unique_subjects[name] = short
-        else:
-            corrected_unique_subjects[name] = short
 
-    corrected_batch_subject_links = set()
-    for batch_name, subject_name in batch_subject_links:
-        if subject_name.lower() in known_typos:
-            subject_name = known_typos[subject_name.lower()]
-        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', subject_name):
-            continue
-        if subject_name not in canonical_subjects and canonical_subjects:
-            matches = difflib.get_close_matches(subject_name, canonical_subjects, n=1, cutoff=0.85)
-            if matches:
-                subject_name = matches[0]
-        corrected_batch_subject_links.add((batch_name, subject_name))
-    # ---------------------------
+        corrected_batch_subject_links = set()
+        for batch_name, subject_name in batch_subject_links:
+            if subject_name.lower() in known_typos:
+                subject_name = known_typos[subject_name.lower()]
+            if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', subject_name):
+                continue
+            if subject_name not in canonical_subjects and canonical_subjects:
+                matches = difflib.get_close_matches(subject_name, canonical_subjects, n=1, cutoff=0.85)
+                if matches:
+                    subject_name = matches[0]
+            corrected_batch_subject_links.add((batch_name, subject_name))
+        # ---------------------------
 
-    # Insert Batches (BS, MS, and PhD batches)
-    batch_name_to_id = {}
-    for batch in legend_batches:
-        b_name = batch['name']
-        if not b_name:
-            continue
-        cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, batch['hex']))
-        cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
-        row = cursor.fetchone()
-        if row:
-            batch_name_to_id[b_name] = row[0]
-
-    # Authoritative Batch-Subject mappings directly from timetable databases
-    for db_file in TIMETABLE_DBS:
-        if os.path.exists(db_file):
-            try:
-                with sqlite3.connect(db_file) as c_conn:
-                    c_cursor = c_conn.cursor()
-                    c_cursor.execute("SELECT DISTINCT BATCH, SUBJECT FROM timetable WHERE BATCH IS NOT NULL AND BATCH != '' AND SUBJECT IS NOT NULL AND SUBJECT != ''")
-                    for b_name, s_name in c_cursor.fetchall():
-                        b_name = (b_name or '').strip()
-                        s_name = (s_name or '').strip()
-                        if not b_name or not s_name:
-                            continue
-                        if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s_name):
-                            continue
-                        if s_name.lower() in known_typos:
-                            s_name = known_typos[s_name.lower()]
-                        corrected_batch_subject_links.add((b_name, s_name))
-                        if s_name not in corrected_unique_subjects:
-                            from sheets_subject_extractor import generate_short_name
-                            corrected_unique_subjects[s_name] = generate_short_name(s_name)
-            except Exception as e:
-                print(f"Warning: Could not read batch-subject mappings from {db_file}: {e}")
-
-    # Register any batches discovered from timetable databases (MS, PhD, Electives)
-    for b_name, _ in corrected_batch_subject_links:
-        if b_name not in batch_name_to_id:
-            color_hex = '#1e3a8a' if b_name.startswith('PhD') else ('#7c3aed' if 'Elective' in b_name else '#0284c7')
-            cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, color_hex))
+        # Insert Batches (BS, MS, and PhD batches)
+        batch_name_to_id = {}
+        for batch in legend_batches:
+            b_name = batch['name']
+            if not b_name:
+                continue
+            cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, batch['hex']))
             cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
             row = cursor.fetchone()
             if row:
                 batch_name_to_id[b_name] = row[0]
 
-    # Insert Subjects
-    subject_name_to_id = {}
-    for name, short in corrected_unique_subjects.items():
-        cursor.execute("INSERT OR IGNORE INTO subjects (name, short_name) VALUES (?, ?)", (name, short))
-        cursor.execute("SELECT id FROM subjects WHERE name = ?", (name,))
-        subject_name_to_id[name] = cursor.fetchone()[0]
+        # Authoritative Batch-Subject mappings directly from timetable databases
+        for db_file in TIMETABLE_DBS:
+            if os.path.exists(db_file):
+                try:
+                    with closing(sqlite3.connect(db_file)) as c_conn:
+                        c_cursor = c_conn.cursor()
+                        c_cursor.execute("SELECT DISTINCT BATCH, SUBJECT FROM timetable WHERE BATCH IS NOT NULL AND BATCH != '' AND SUBJECT IS NOT NULL AND SUBJECT != ''")
+                        for b_name, s_name in c_cursor.fetchall():
+                            b_name = (b_name or '').strip()
+                            s_name = (s_name or '').strip()
+                            if not b_name or not s_name:
+                                continue
+                            if re.search(r'(?i)\b(FYP|Thesis|Proposal|Evaluation)\b', s_name):
+                                continue
+                            if s_name.lower() in known_typos:
+                                s_name = known_typos[s_name.lower()]
+                            corrected_batch_subject_links.add((b_name, s_name))
+                            if s_name not in corrected_unique_subjects:
+                                from sheets_subject_extractor import generate_short_name
+                                corrected_unique_subjects[s_name] = generate_short_name(s_name)
+                except Exception as e:
+                    print(f"Warning: Could not read batch-subject mappings from {db_file}: {e}")
 
-    # Insert Batch-Subject Links (All batches: BS, MS, PhD, Electives)
-    inserted_links = 0
-    for batch_name, subject_name in corrected_batch_subject_links:
-        batch_id = batch_name_to_id.get(batch_name)
-        subject_id = subject_name_to_id.get(subject_name)
+        # Register any batches discovered from timetable databases (MS, PhD, Electives)
+        for b_name, _ in corrected_batch_subject_links:
+            if b_name not in batch_name_to_id:
+                color_hex = '#1e3a8a' if b_name.startswith('PhD') else ('#7c3aed' if 'Elective' in b_name else '#0284c7')
+                cursor.execute("INSERT OR IGNORE INTO batches (name, color_hex) VALUES (?, ?)", (b_name, color_hex))
+                cursor.execute("SELECT id FROM batches WHERE name = ?", (b_name,))
+                row = cursor.fetchone()
+                if row:
+                    batch_name_to_id[b_name] = row[0]
 
-        if batch_id and subject_id:
-            try:
-                cursor.execute("INSERT OR IGNORE INTO batch_subjects (batch_id, subject_id) VALUES (?, ?)", (batch_id, subject_id))
-                inserted_links += 1
-            except sqlite3.IntegrityError:
-                pass
+        # Insert Subjects
+        subject_name_to_id = {}
+        for name, short in corrected_unique_subjects.items():
+            cursor.execute("INSERT OR IGNORE INTO subjects (name, short_name) VALUES (?, ?)", (name, short))
+            cursor.execute("SELECT id FROM subjects WHERE name = ?", (name,))
+            subject_name_to_id[name] = cursor.fetchone()[0]
 
-    conn.commit()
-    conn.close()
+        # Insert Batch-Subject Links (All batches: BS, MS, PhD, Electives)
+        inserted_links = 0
+        for batch_name, subject_name in corrected_batch_subject_links:
+            batch_id = batch_name_to_id.get(batch_name)
+            subject_id = subject_name_to_id.get(subject_name)
+
+            if batch_id and subject_id:
+                try:
+                    cursor.execute("INSERT OR IGNORE INTO batch_subjects (batch_id, subject_id) VALUES (?, ?)", (batch_id, subject_id))
+                    inserted_links += 1
+                except sqlite3.IntegrityError:
+                    pass
+
+        conn.commit()
 
     print(f"\nSuccessfully rebuilt {DB_FILE}:")
     print(f"  - Batches: {len(batch_name_to_id)}")

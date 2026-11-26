@@ -23,7 +23,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
 from unittest import mock
 
@@ -36,10 +36,11 @@ import databaseHandler
 import generate_static_json
 import main as main_mod
 import rebuild_db
+import rebuild_subjects
 import sheets_subject_extractor
 import sheets_to_df
 import sync_faculty_to_supabase as sfs
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
 from googleapiclient.errors import HttpError
 
 
@@ -1077,6 +1078,354 @@ class TestUpgrade4And5HardeningAndContracts(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 sfs.main()
             self.assertNotEqual(ctx.exception.code, 0)
+
+
+class TestHardeningEdgeCasesAndRegressions(unittest.TestCase):
+    def test_token_json_malformed_and_no_refresh_token_ci_vs_local(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tok = Path(tmpdir) / "token.json"
+            cred = Path(tmpdir) / "credentials.json"
+            cred.write_text('{"installed":{"client_id":"c"}}', encoding="utf-8")
+
+            # 1. Malformed token.json in CI -> OAUTH_TOKEN_EXPIRED without InstalledAppFlow
+            tok.write_text("{corrupt json", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CI": "true"}, clear=False), mock.patch.object(
+                databaseHandler.InstalledAppFlow, "from_client_secrets_file"
+            ) as mock_flow:
+                with self.assertRaises(RuntimeError) as ctx:
+                    databaseHandler.get_sheets_service(token_path=tok, credentials_path=cred)
+            self.assertIn("OAUTH_TOKEN_EXPIRED", str(ctx.exception))
+            mock_flow.assert_not_called()
+
+            # 2. Expired token without refresh_token in CI -> OAUTH_TOKEN_EXPIRED
+            tok.write_text('{"token":"x"}', encoding="utf-8")
+            fake_creds_no_rt = mock.MagicMock(valid=False, expired=True, refresh_token=None)
+            with mock.patch.dict(os.environ, {"CI": "true"}, clear=False), mock.patch.object(
+                databaseHandler.Credentials, "from_authorized_user_file", return_value=fake_creds_no_rt
+            ), mock.patch.object(databaseHandler.InstalledAppFlow, "from_client_secrets_file") as mock_flow:
+                with self.assertRaises(RuntimeError) as ctx2:
+                    databaseHandler.get_sheets_service(token_path=tok, credentials_path=cred)
+            self.assertIn("OAUTH_TOKEN_EXPIRED", str(ctx2.exception))
+            mock_flow.assert_not_called()
+
+            # 3. TransportError on refresh in CI -> OAUTH_TOKEN_EXPIRED
+            fake_creds_rt = mock.MagicMock(valid=False, expired=True, refresh_token="r")
+            fake_creds_rt.refresh.side_effect = TransportError("network down")
+            with mock.patch.dict(os.environ, {"CI": "true"}, clear=False), mock.patch.object(
+                databaseHandler.Credentials, "from_authorized_user_file", return_value=fake_creds_rt
+            ):
+                with self.assertRaises(RuntimeError) as ctx3:
+                    databaseHandler.get_sheets_service(token_path=tok, credentials_path=cred)
+            self.assertIn("OAUTH_TOKEN_EXPIRED", str(ctx3.exception))
+
+            # 4. Malformed token.json locally (CI unset) -> interactive OAuth fallback
+            tok.write_text("{corrupt json", encoding="utf-8")
+            fresh_creds = mock.MagicMock(valid=True)
+            fresh_creds.to_json.return_value = '{"token":"fresh"}'
+            fake_flow = mock.MagicMock()
+            fake_flow.run_local_server.return_value = fresh_creds
+            env_no_ci = {k: v for k, v in os.environ.items() if k not in ("CI", "GITHUB_ACTIONS")}
+            with mock.patch.dict(os.environ, env_no_ci, clear=True), mock.patch.object(
+                databaseHandler.InstalledAppFlow, "from_client_secrets_file", return_value=fake_flow
+            ) as mock_flow, mock.patch.object(databaseHandler, "build", return_value="svc"):
+                svc = databaseHandler.get_sheets_service(token_path=tok, credentials_path=cred)
+            self.assertEqual(svc, "svc")
+            mock_flow.assert_called_once()
+            fake_flow.run_local_server.assert_called_once()
+
+    def test_rebuild_db_preserves_existing_dbs_on_midbuild_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            t_db = os.path.join(tmpdir, "t.db")
+            l_db = os.path.join(tmpdir, "l.db")
+            with open(t_db, "wb") as f:
+                f.write(b"ORIGINAL_THEORY_DB")
+            with open(l_db, "wb") as f:
+                f.write(b"ORIGINAL_LAB_DB")
+
+            with mock.patch.object(
+                rebuild_db, "get_active_spreadsheet_id", return_value=("2027-spring", "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCD")
+            ), mock.patch.object(rebuild_db, "get_sheets_service"), mock.patch.object(
+                rebuild_db, "get_day_sheet_mapping", return_value={"Monday": "Monday"}
+            ), mock.patch.object(
+                rebuild_db, "read_and_clean_classroom_df", side_effect=RuntimeError("mid-build failure")
+            ):
+                with self.assertRaises(RuntimeError):
+                    rebuild_db.rebuild(course_db=t_db, lab_db=l_db, skip_static_gen=True)
+
+            with open(t_db, "rb") as f:
+                self.assertEqual(f.read(), b"ORIGINAL_THEORY_DB")
+            with open(l_db, "rb") as f:
+                self.assertEqual(f.read(), b"ORIGINAL_LAB_DB")
+            self.assertEqual(sorted(os.listdir(tmpdir)), ["l.db", "t.db"])
+
+    def test_sheets_subject_extractor_and_evening_legend_guards(self):
+        fake_svc = mock.MagicMock()
+        fake_svc.spreadsheets.return_value.get.return_value.execute.return_value = {
+            "sheets": [{"data": [{"rowData": []}]}]
+        }
+        with mock.patch.object(
+            sheets_subject_extractor, "get_active_spreadsheet_id", return_value=("2027-spring", "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCD")
+        ), mock.patch.object(sheets_subject_extractor, "get_sheets_service", return_value=fake_svc), mock.patch.object(
+            sheets_subject_extractor, "get_day_sheet_mapping", return_value={"Monday": "Monday"}
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                sheets_subject_extractor.extract_subjects_and_batches_from_api()
+        self.assertIn("SHEET_STRUCTURE_INVALID", str(ctx.exception))
+
+        # Evening legend stops before Room header row and tolerates formattedValue=None
+        row_data = [
+            {"values": [{}, {"formattedValue": "Evening MS CS", "effectiveFormat": {"backgroundColor": {"red": 0.4, "green": 0.5, "blue": 0.6}}}]},
+            {"values": [{"formattedValue": "Room"}, {"formattedValue": None}]},
+            {"values": [{}, {"formattedValue": "Body Course (BCS-2A)", "effectiveFormat": {"backgroundColor": {"red": 0.1, "green": 0.2, "blue": 0.3}}}]},
+        ]
+        self.assertEqual(sheets_to_df._find_first_room_header_row(row_data), 1)
+        legend = sheets_to_df._extract_evening_legend(row_data, evening_start_col=1)
+        self.assertEqual(legend[(102, 128, 153)], "Evening MS CS")
+        self.assertNotIn((26, 51, 77), legend)
+
+    def test_generate_static_json_ignores_bin_subdirectory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subj_db = os.path.join(tmpdir, "subjects.db")
+            course_db = os.path.join(tmpdir, "course.db")
+            lab_db = os.path.join(tmpdir, "lab.db")
+            out_dir = os.path.join(tmpdir, "out")
+            sched_dir = os.path.join(out_dir, "schedules")
+            dir_bin = os.path.join(sched_dir, "keep_dir.bin")
+            os.makedirs(dir_bin, exist_ok=True)
+            stale_file = os.path.join(sched_dir, "stale.bin")
+            with open(stale_file, "w", encoding="utf-8") as f:
+                f.write("stale")
+
+            with closing(sqlite3.connect(subj_db)) as c_s:
+                c_s.execute("CREATE TABLE batches (id INTEGER PRIMARY KEY, name TEXT, color_hex TEXT)")
+                c_s.execute("CREATE TABLE subjects (id INTEGER PRIMARY KEY, name TEXT, short_name TEXT)")
+                c_s.execute("CREATE TABLE batch_subjects (id INTEGER PRIMARY KEY, batch_id INTEGER, subject_id INTEGER)")
+                c_s.commit()
+            with closing(sqlite3.connect(course_db)) as c_c:
+                c_c.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, CLASSROOM TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+                c_c.commit()
+            with closing(sqlite3.connect(lab_db)) as c_l:
+                c_l.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, LAB TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+                c_l.commit()
+
+            with mock.patch.object(generate_static_json, "SUBJECTS_DB", subj_db), mock.patch.object(
+                generate_static_json, "COURSE_DB", course_db
+            ), mock.patch.object(generate_static_json, "LAB_DB", lab_db), mock.patch.object(
+                generate_static_json, "OUTPUT_DIR", out_dir
+            ):
+                generate_static_json.generate_static_data()
+
+            self.assertFalse(os.path.exists(stale_file))
+            self.assertTrue(os.path.isdir(dir_bin))
+
+    def test_reconcile_json_string_schedule_and_case_email_dedup(self):
+        conn_t = sqlite3.connect(":memory:")
+        conn_t.row_factory = sqlite3.Row
+        conn_t.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, CLASSROOM TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+        conn_t.execute("INSERT INTO timetable VALUES (1, 'Monday', '08:30', '09:50', 'OOP', 'C-301', 'CS-A', 'BS 26 CS', NULL)")
+        conn_l = sqlite3.connect(":memory:")
+        conn_l.row_factory = sqlite3.Row
+        conn_l.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, LAB TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+        conn_l.execute("INSERT INTO timetable VALUES (1, 'Monday', '08:30', '09:50', 'OOP', 'Rawal-1', 'CS-B', 'BS 26 CS', NULL)")
+
+        rows = [
+            {
+                "email": "Test.Prof@nu.edu.pk",
+                "semester_id": "2027-spring",
+                "name": "Prof Test",
+                "designation": "AP",
+                "department": "CS",
+                "office": "C-101",
+                "schedule": json.dumps({"Monday": [{"subject": "OOP", "section": "CS-A", "batch": "BS 26 CS", "is_lab": False}]}),
+                "courses": json.dumps([{"course_code": "CS1002", "course_name": "OOP", "canonical_subject": "OOP", "sections": ["BCS-2A"], "is_lab": False}]),
+                "total_credit_hours": 3.0,
+            },
+            {
+                "email": "test.prof@nu.edu.pk",
+                "semester_id": "2027-spring",
+                "name": "Prof Test",
+                "designation": "AP",
+                "department": "CS",
+                "office": "C-101",
+                "schedule": {},
+                "courses": [{"course_code": "CL1002", "course_name": "OOP Lab", "canonical_subject": "OOP", "sections": ["BCS-2B"], "is_lab": True}],
+                "total_credit_hours": 1.0,
+            },
+        ]
+        try:
+            reconciled = sfs.reconcile_existing_db_rows(
+                rows, conn_t.cursor(), conn_l.cursor(), semester_id="2027-spring", year=2027, season="Spring"
+            )
+        finally:
+            conn_t.close()
+            conn_l.close()
+
+        # Deduplicated to 1 record and theory/lab at same time stay distinct slots
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(reconciled[0]["email"], "test.prof@nu.edu.pk")
+        monday_slots = reconciled[0]["schedule"]["Monday"]
+        self.assertEqual(len(monday_slots), 2)
+        self.assertEqual({bool(s["is_lab"]) for s in monday_slots}, {True, False})
+
+        # Unsorted comma-separated initial section order matches sorted merge order
+        w1 = {d: [] for d in sfs.DAYS_OF_WEEK}
+        w2 = {d: [] for d in sfs.DAYS_OF_WEEK}
+        row_unsorted = {"DAY": "Monday", "START_TIME": "10:00", "END_TIME": "11:20", "SUBJECT": "OOP", "LOCATION": "C-301", "SECTION": "CS-B, CS-A", "BATCH": "BS 26 CS", "STATUS": None}
+        row_sorted = dict(row_unsorted, SECTION="CS-A, CS-B")
+        sfs._merge_slot_into_weekly_schedule(w1, row_unsorted, "CS1002", "OOP", "CS-B, CS-A", "BS 26 CS", False, semester_id="2027-spring")
+        sfs._merge_slot_into_weekly_schedule(w2, row_sorted, "CS1002", "OOP", "CS-A, CS-B", "BS 26 CS", False, semester_id="2027-spring")
+        self.assertEqual(w1["Monday"][0]["slot_uid"], w2["Monday"][0]["slot_uid"])
+        self.assertEqual(w1["Monday"][0]["section"], "CS-A, CS-B")
+
+    def test_zip_boundaries_and_backslash_traversal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 500 entries allowed; 501 rejected
+            ok_zip = os.path.join(tmpdir, "ok500.xlsx")
+            with zipfile.ZipFile(ok_zip, "w") as zf:
+                for i in range(500):
+                    zf.writestr(f"xl/f_{i}.xml", "a")
+            sfs.validate_xlsx_zip_safety(ok_zip)
+
+            too_many = os.path.join(tmpdir, "bad501.xlsx")
+            with zipfile.ZipFile(too_many, "w") as zf:
+                for i in range(501):
+                    zf.writestr(f"xl/f_{i}.xml", "a")
+            with self.assertRaises(sfs.JobError) as ctx:
+                sfs.validate_xlsx_zip_safety(too_many)
+            self.assertEqual(ctx.exception.error_code, "ZIP_BOMB_DETECTED")
+
+            # Backslash traversal rejected
+            backslash_zip = os.path.join(tmpdir, "win_trav.xlsx")
+            with zipfile.ZipFile(backslash_zip, "w") as zf:
+                zf.writestr("..\\..\\etc\\passwd", "nope")
+            with self.assertRaises(sfs.JobError) as ctx2:
+                sfs.validate_xlsx_zip_safety(backslash_zip)
+            self.assertEqual(ctx2.exception.error_code, "INVALID_XLSX")
+
+    def test_claim_job_type_isolation_and_marker_files(self):
+        seen_params = []
+
+        def claim_handler(op, sql, params, cur):
+            if op == "execute" and "UPDATE public.ingestion_jobs" in sql:
+                seen_params.append((sql, params))
+                return [{"id": "11111111-1111-1111-1111-111111111111", "semester_id": "2027-spring"}]
+            return []
+
+        with mock.patch.object(sfs.psycopg2, "connect", side_effect=lambda *a, **k: FakeConn(claim_handler)):
+            sfs._claim_ingestion_job("postgresql://fake", "11111111-1111-1111-1111-111111111111", expected_job_types=("NEW_DRAFT", "RETRY_JOB"))
+            sfs._claim_ingestion_job("postgresql://fake", "11111111-1111-1111-1111-111111111111", expected_job_types=("REFRESH_DRAFT_SHEET",))
+
+        self.assertIn("job_type = ANY(%s)", seen_params[0][0])
+        self.assertEqual(seen_params[0][1][2], ["NEW_DRAFT", "RETRY_JOB"])
+        self.assertEqual(seen_params[1][1][2], ["REFRESH_DRAFT_SHEET"])
+
+        # Marker written on _mark_job_failed and send_sync_callback
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ingest_marker = os.path.join(tmpdir, "ingest.marker")
+            cb_marker = os.path.join(tmpdir, "cb.marker")
+            with mock.patch.dict(os.environ, {"INGEST_FAIL_MARKER_PATH": ingest_marker, "SYNC_CB_MARKER_PATH": cb_marker}, clear=False):
+                with mock.patch.object(sfs.psycopg2, "connect", side_effect=lambda *a, **k: FakeConn(lambda *args: [])):
+                    sfs._mark_job_failed("postgresql://fake", "11111111-1111-1111-1111-111111111111", "INTERNAL_ERROR", "boom")
+                fake_resp = mock.MagicMock(ok=True)
+                fake_resp.json.return_value = {"ok": True}
+                with mock.patch.object(sfs.requests, "post", return_value=fake_resp):
+                    sfs.send_sync_callback("faculty_sync_callback", "2027-spring", 1, "SYNCED", None, "https://cb.example", "sec")
+            self.assertTrue(os.path.exists(ingest_marker))
+            self.assertTrue(os.path.exists(cb_marker))
+
+    def test_reconcile_snapshot_rows_fallback_status_and_prechecks(self):
+        snap_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        sheet_id = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCD"
+
+        # 1. Draft / Discarded snapshot rejected before building sheets
+        for bad_status in ("DRAFT", "DISCARDED"):
+            def bad_status_db(op, sql, params, cur, st=bad_status):
+                if op == "execute" and "FROM public.semester_snapshots ss" in sql:
+                    return [{
+                        "id": snap_id, "semester_id": "2027-spring", "status": st,
+                        "snap_sheet_id": sheet_id, "sem_sheet_id": sheet_id,
+                        "parsed_allocations": None, "allocation_storage_path": None,
+                        "academic_year": 2027, "season": "Spring",
+                        "state_version": 2, "is_published": True, "deleted_at": None,
+                    }]
+                return []
+
+            with mock.patch.object(sfs.psycopg2, "connect", side_effect=lambda *a, **k: FakeConn(bad_status_db)), mock.patch.object(
+                sfs, "send_sync_callback"
+            ) as mock_cb:
+                with self.assertRaises(sfs.JobError) as ctx:
+                    sfs.run_reconcile_snapshot(
+                        snap_id, 2, "postgresql://fake", portal_callback_url="https://cb.example", callback_secret="sec"
+                    )
+            self.assertEqual(ctx.exception.error_code, "INVALID_SNAPSHOT_STATUS")
+            mock_cb.assert_called_once()
+            self.assertEqual(mock_cb.call_args.kwargs["status"], "FAILED")
+
+        # 2. semester_snapshot_rows fallback & missing callback secret aborts before upsert commit
+        def rows_fallback_db(op, sql, params, cur):
+            if op == "execute" and "FROM public.semester_snapshots ss" in sql:
+                return [{
+                    "id": snap_id, "semester_id": "2027-spring", "status": "ROLLED_BACK",
+                    "snap_sheet_id": sheet_id, "sem_sheet_id": sheet_id,
+                    "parsed_allocations": None, "allocation_storage_path": None,
+                    "academic_year": 2027, "season": "Spring",
+                    "state_version": 2, "is_published": True, "deleted_at": None,
+                }]
+            if op == "execute" and "FROM public.semester_snapshot_rows" in sql:
+                return [{
+                    "email": "test@nu.edu.pk", "semester_id": "2027-spring", "name": "Prof",
+                    "designation": "AP", "department": "CS", "office": "C-101",
+                    "schedule": {"Monday": []}, "courses": [], "schedule_hash": "h", "total_credit_hours": 0.0,
+                }]
+            return []
+
+        def init_tmp_dbs(sid, course_db, lab_db, **kwargs):
+            with closing(sqlite3.connect(course_db)) as c_t:
+                c_t.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, CLASSROOM TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+                c_t.commit()
+            with closing(sqlite3.connect(lab_db)) as c_l:
+                c_l.execute("CREATE TABLE timetable (ID INTEGER PRIMARY KEY, DAY TEXT, START_TIME TEXT, END_TIME TEXT, SUBJECT TEXT, LAB TEXT, SECTION TEXT, BATCH TEXT, STATUS TEXT)")
+                c_l.commit()
+
+        env_no_cb = {k: v for k, v in os.environ.items() if k not in ("PORTAL_CALLBACK_URL", "SYNC_CALLBACK_SECRET")}
+        with mock.patch.dict(os.environ, env_no_cb, clear=True), mock.patch.object(
+            sfs.psycopg2, "connect", side_effect=lambda *a, **k: FakeConn(rows_fallback_db)
+        ), mock.patch("rebuild_db.build_sqlite_from_google_sheet", side_effect=init_tmp_dbs), mock.patch.object(
+            sfs, "upsert_via_psycopg2"
+        ) as mock_upsert:
+            with self.assertRaises(sfs.JobError) as ctx_cb:
+                sfs.run_reconcile_snapshot(snap_id, 2, "postgresql://fake")
+        self.assertEqual(ctx_cb.exception.error_code, "MISSING_CALLBACK_CONFIG")
+        mock_upsert.assert_not_called()
+
+    def test_sync_yml_marker_fail_safe_and_rebuild_subjects_closes_handles(self):
+        yml_path = os.path.join(ROOT_DIR, ".github", "workflows", "sync.yml")
+        with open(yml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        for expected in (
+            "INGEST_FAIL_MARKER_PATH: /tmp/ingest_job_marked",
+            "SYNC_CB_MARKER_PATH: /tmp/faculty_cb_sent",
+            "[ ! -f /tmp/ingest_job_marked ]",
+            'os.path.exists("/tmp/faculty_cb_sent")',
+        ):
+            self.assertIn(expected, content)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subj_db = Path(tmpdir) / "subjects.db"
+            course_db = Path(tmpdir) / "t.db"
+            with closing(sqlite3.connect(course_db)) as c_t:
+                c_t.execute("CREATE TABLE timetable (DAY TEXT, SUBJECT TEXT, BATCH TEXT)")
+                c_t.execute("INSERT INTO timetable VALUES ('Monday', 'OOP', 'BS 26 CS')")
+                c_t.commit()
+
+            with mock.patch.object(rebuild_subjects, "DB_FILE", subj_db), mock.patch.object(
+                rebuild_subjects, "TIMETABLE_DBS", [str(course_db)]
+            ), mock.patch.object(
+                rebuild_subjects, "extract_subjects_and_batches_from_api",
+                return_value=([{"name": "BS 26 CS", "hex": "#000000"}], {"OOP": "OOP"}, [("BS 26 CS", "OOP")]),
+            ):
+                rebuild_subjects.rebuild_subjects_db()
+            self.assertTrue(subj_db.exists())
 
 
 if __name__ == "__main__":

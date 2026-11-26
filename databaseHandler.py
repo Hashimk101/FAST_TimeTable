@@ -1,12 +1,14 @@
+import json
+import os
+import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
+
 import pandas as pd
 from pandas import DataFrame, Series
-import numpy as np
-import os.path
-import re
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -705,12 +707,13 @@ def _extract_http_status(exc: Exception) -> int | None:
         return None
 
 
-def execute_google_api_call(request_fn, sleep_fn=time.sleep):
+def execute_google_api_call(request_fn, sleep_fn=None):
     """
     Executes a Google API `.execute()` callable with bounded exponential backoff
     (3 total attempts: waits 2s then 6s) on HTTP 429/500/503, and fails immediately
     with SHEET_ACCESS_DENIED on HTTP 401/403/404.
     """
+    wait_fn = sleep_fn or time.sleep
     max_attempts = len(GOOGLE_RETRY_DELAYS_SEC) + 1
     for attempt in range(max_attempts):
         try:
@@ -724,7 +727,7 @@ def execute_google_api_call(request_fn, sleep_fn=time.sleep):
             if status in RETRYABLE_GOOGLE_HTTP_STATUS and attempt < max_attempts - 1:
                 delay = GOOGLE_RETRY_DELAYS_SEC[attempt]
                 print(f"[WARN] Google API transient HTTP {status}; retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
-                sleep_fn(delay)
+                wait_fn(delay)
                 continue
             raise
 
@@ -737,13 +740,20 @@ def get_sheets_service(token_path=None, credentials_path=None):
 
     creds = None
     if tok_path.exists():
-        creds = Credentials.from_authorized_user_file(str(tok_path), scopes)
+        try:
+            creds = Credentials.from_authorized_user_file(str(tok_path), scopes)
+        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            if is_ci:
+                raise RuntimeError(
+                    f"OAUTH_TOKEN_EXPIRED: Google OAuth token file is malformed or incomplete in CI: {exc}"
+                ) from exc
+            creds = None
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-            except RefreshError as exc:
+            except (RefreshError, TransportError) as exc:
                 if is_ci:
                     raise RuntimeError(
                         f"OAUTH_TOKEN_EXPIRED: Google OAuth token refresh failed in CI: {exc}"
@@ -878,7 +888,7 @@ def fetch_timetable_for_section(db_name: str, section: str, list_of_subs: list, 
     # Prepare the placeholder string (e.g., "?, ?, ?") for the SQL IN clause
     placeholders = ', '.join('?' for _ in list_of_subs)
 
-    with sqlite3.connect(db_name) as conn:
+    with closing(sqlite3.connect(db_name)) as conn:
         cursor = conn.cursor()
 
         for day in days_of_week:

@@ -32,7 +32,7 @@ import time
 import unicodedata
 import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Tuple, Set, Any, Union
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -819,78 +819,81 @@ def read_course_allocations(excel_path: str = DEFAULT_EXCEL_PATH, year: int = 20
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     allocations = []
 
-    IGNORED_INSTRUCTORS = {
-        "fyp committee", "msrc", "tbd", "none", "nil", "to be announced", 
-        "course instructor", "instructor"
-    }
+    try:
+        IGNORED_INSTRUCTORS = {
+            "fyp committee", "msrc", "tbd", "none", "nil", "to be announced", 
+            "course instructor", "instructor"
+        }
 
-    for sheet_name in ALLOCATION_SHEETS:
-        if sheet_name not in wb.sheetnames:
-            print(f"[WARN] Sheet '{sheet_name}' not found in Excel workbook. Skipping.")
-            continue
-
-        ws = wb[sheet_name]
-        is_lab = "lab" in sheet_name.lower()
-        print(f"Reading allocation sheet: '{sheet_name}' (is_lab={is_lab})...")
-
-        header_row = 3
-        for r in range(1, 10):
-            vals = [str(ws.cell(r, c).value or '').strip().lower() for c in range(1, 10)]
-            if "code" in vals and "course" in vals:
-                header_row = r
-                break
-
-        curr_code = ""
-        curr_course = ""
-        curr_chs = 3.0 if not is_lab else 1.0
-        curr_coordinator = ""
-
-        for row_idx in range(header_row + 1, ws.max_row + 1):
-            cell_code = ws.cell(row_idx, 2).value
-            cell_course = ws.cell(row_idx, 3).value
-            cell_chs = ws.cell(row_idx, 4).value
-            cell_section = ws.cell(row_idx, 5).value
-            cell_instructor = ws.cell(row_idx, 6).value
-            cell_coordinator = ws.cell(row_idx, 7).value
-
-            if cell_code and str(cell_code).strip():
-                curr_code = str(cell_code).strip()
-            if cell_course and str(cell_course).strip():
-                curr_course = str(cell_course).strip()
-            if cell_chs is not None:
-                try:
-                    curr_chs = float(cell_chs)
-                except ValueError:
-                    pass
-            if cell_coordinator and str(cell_coordinator).strip():
-                curr_coordinator = str(cell_coordinator).strip()
-
-            if not cell_section or not cell_instructor:
+        for sheet_name in ALLOCATION_SHEETS:
+            if sheet_name not in wb.sheetnames:
+                print(f"[WARN] Sheet '{sheet_name}' not found in Excel workbook. Skipping.")
                 continue
 
-            sec_str = str(cell_section).strip()
-            instr_str = str(cell_instructor).strip()
+            ws = wb[sheet_name]
+            is_lab = "lab" in sheet_name.lower()
+            print(f"Reading allocation sheet: '{sheet_name}' (is_lab={is_lab})...")
 
-            if instr_str.lower() in IGNORED_INSTRUCTORS or sec_str.lower() in {"section", "nil"}:
-                continue
+            header_row = 3
+            for r in range(1, 10):
+                vals = [str(ws.cell(r, c).value or '').strip().lower() for c in range(1, 10)]
+                if "code" in vals and "course" in vals:
+                    header_row = r
+                    break
 
-            sec_info = translate_section_code(sec_str, year=year, season=season_lower)
-            course_is_lab = is_lab or "lab" in curr_course.lower()
-            canonical_subj = resolve_canonical_subject(curr_course, curr_code, is_lab=course_is_lab)
+            curr_code = ""
+            curr_course = ""
+            curr_chs = 3.0 if not is_lab else 1.0
+            curr_coordinator = ""
 
-            allocations.append({
-                "sheet": sheet_name,
-                "is_lab": course_is_lab,
-                "course_code": curr_code,
-                "course_title": curr_course,
-                "credit_hours": curr_chs,
-                "coordinator": curr_coordinator,
-                "raw_section": sec_str,
-                "raw_instructor": instr_str,
-                "batch": sec_info["batch"],
-                "timetable_section": sec_info["timetable_section"],
-                "canonical_subject": canonical_subj
-            })
+            for row_idx in range(header_row + 1, ws.max_row + 1):
+                cell_code = ws.cell(row_idx, 2).value
+                cell_course = ws.cell(row_idx, 3).value
+                cell_chs = ws.cell(row_idx, 4).value
+                cell_section = ws.cell(row_idx, 5).value
+                cell_instructor = ws.cell(row_idx, 6).value
+                cell_coordinator = ws.cell(row_idx, 7).value
+
+                if cell_code and str(cell_code).strip():
+                    curr_code = str(cell_code).strip()
+                if cell_course and str(cell_course).strip():
+                    curr_course = str(cell_course).strip()
+                if cell_chs is not None:
+                    try:
+                        curr_chs = float(cell_chs)
+                    except ValueError:
+                        pass
+                if cell_coordinator and str(cell_coordinator).strip():
+                    curr_coordinator = str(cell_coordinator).strip()
+
+                if not cell_section or not cell_instructor:
+                    continue
+
+                sec_str = str(cell_section).strip()
+                instr_str = str(cell_instructor).strip()
+
+                if instr_str.lower() in IGNORED_INSTRUCTORS or sec_str.lower() in {"section", "nil"}:
+                    continue
+
+                sec_info = translate_section_code(sec_str, year=year, season=season_lower)
+                course_is_lab = is_lab or "lab" in curr_course.lower()
+                canonical_subj = resolve_canonical_subject(curr_course, curr_code, is_lab=course_is_lab)
+
+                allocations.append({
+                    "sheet": sheet_name,
+                    "is_lab": course_is_lab,
+                    "course_code": curr_code,
+                    "course_title": curr_course,
+                    "credit_hours": curr_chs,
+                    "coordinator": curr_coordinator,
+                    "raw_section": sec_str,
+                    "raw_instructor": instr_str,
+                    "batch": sec_info["batch"],
+                    "timetable_section": sec_info["timetable_section"],
+                    "canonical_subject": canonical_subj
+                })
+    finally:
+        wb.close()
 
     print(f"Loaded {len(allocations)} total valid course section allocations.")
     return allocations
@@ -1318,6 +1321,13 @@ def _merge_slot_into_weekly_schedule(
     raw_status = str(row["STATUS"] or "").strip()
     is_cancelled = "cancel" in raw_status.lower() if raw_status else False
     clean_sec = sec_name if sec_name else format_clean_section(str(row["SECTION"] or ""))
+    if "," in clean_sec:
+        sec_parts = []
+        for s_part in clean_sec.split(","):
+            s_part = s_part.strip()
+            if s_part and s_part not in sec_parts:
+                sec_parts.append(s_part)
+        clean_sec = ", ".join(sorted(sec_parts))
     slot_uid = compute_slot_uid(
         semester_id,
         day,
@@ -1348,6 +1358,7 @@ def _merge_slot_into_weekly_schedule(
             existing.get("start_time") == slot_entry["start_time"]
             and existing.get("end_time") == slot_entry["end_time"]
             and existing.get("subject") == slot_entry["subject"]
+            and bool(existing.get("is_lab")) == final_is_lab
         ):
             if clean_sec:
                 existing_secs = [s.strip() for s in str(existing.get("section") or "").split(",") if s.strip()]
@@ -1424,37 +1435,6 @@ def verify_compiled_records_integrity(records: List[Dict[str, Any]]) -> List[Dic
     return anomalies
 
 
-def resolve_active_semester_id(database_url: str, fallback: str = "2026-fall") -> str:
-    """Dynamically resolves the currently active semester ID from public.semesters."""
-    if is_ci_environment():
-        return str(get_active_semester_config()["semester_id"])
-    if not HAS_PSYCOPG2 or not database_url:
-        return fallback
-    conn = None
-    cursor = None
-    try:
-        conn = psycopg2.connect(database_url)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id FROM public.semesters
-            WHERE is_active = true AND is_published = true AND deleted_at IS NULL
-            ORDER BY updated_at DESC LIMIT 1;
-            """
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            return str(row[0])
-    except Exception as err:
-        print(f"[WARN] Could not resolve active semester from DB ({err}); using fallback '{fallback}'.")
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-    return fallback
-
-
 def compile_faculty_schedules(
     allocations: List[Dict[str, Any]],
     faculty_roster: List[Dict[str, Any]],
@@ -1521,6 +1501,7 @@ def compile_faculty_schedules(
             }
 
         if match and match.get("name"):
+            match = dict(match)
             match["name"] = CANONICAL_FALLBACK_NAMES.get(match["name"].lower().strip(), match["name"])
 
         email = match["email"].lower().strip()
@@ -1688,8 +1669,10 @@ KNOWN_ERROR_PREFIXES = (
     "JOB_CANCELLED_OR_TIMED_OUT",
     "SNAPSHOT_NOT_FOUND",
     "NOT_A_DRAFT",
+    "INVALID_SNAPSHOT_STATUS",
     "SEMESTER_UNPUBLISHED",
     "RECONCILE_ABORTED",
+    "MISSING_CALLBACK_CONFIG",
 )
 
 
@@ -1748,7 +1731,12 @@ def validate_xlsx_zip_safety(xlsx_path: str) -> None:
             total_compressed = 0
             for info in infos:
                 fname = info.filename or ""
-                if fname.startswith("/") or ".." in Path(fname).parts:
+                fname_norm = fname.replace("\\", "/")
+                if (
+                    fname.startswith("/")
+                    or fname_norm.startswith("/")
+                    or ".." in PurePosixPath(fname_norm).parts
+                ):
                     raise JobError("INVALID_XLSX", f"Unsafe archive path entry detected: {fname!r}")
                 if info.file_size > MAX_ZIP_UNCOMPRESSED_BYTES:
                     raise JobError(
@@ -1914,6 +1902,19 @@ def sign_sync_callback(
     }
 
 
+def _write_marker_file(env_var: str) -> None:
+    """Writes a workflow coordination marker file if the env var path is configured."""
+    marker = (os.environ.get(env_var) or "").strip()
+    if not marker:
+        return
+    try:
+        marker_path = Path(marker)
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text("1\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"[WARN] Could not write marker file {marker!r}: {exc}")
+
+
 def send_sync_callback(
     action: str,
     semester_id: str,
@@ -1922,7 +1923,7 @@ def send_sync_callback(
     error_message: Optional[str] = None,
     portal_callback_url: Optional[str] = None,
     callback_secret: Optional[str] = None,
-    sleep_fn=time.sleep,
+    sleep_fn=None,
 ) -> Dict[str, Any]:
     if action not in ("student_sync_callback", "faculty_sync_callback"):
         raise ValueError(f"Unsupported callback action: {action!r}")
@@ -1932,6 +1933,7 @@ def send_sync_callback(
     if not base_url or not secret:
         raise RuntimeError("PORTAL_CALLBACK_URL and SYNC_CALLBACK_SECRET are required for signed callbacks.")
 
+    wait_fn = sleep_fn or time.sleep
     raw_body = build_sync_callback_body(semester_id, state_version, status, error_message)
     url = f"{base_url}/api/semesters?action={action}"
 
@@ -1941,18 +1943,19 @@ def send_sync_callback(
         try:
             resp = requests.post(url, data=raw_body.encode("utf-8"), headers=headers, timeout=30)
             if resp.ok:
+                _write_marker_file("SYNC_CB_MARKER_PATH")
                 try:
                     return resp.json()
                 except Exception:
                     return {"ok": True, "status_code": resp.status_code}
             if resp.status_code >= 500 and attempt < 2:
-                sleep_fn(1 + attempt)
+                wait_fn(1 + attempt)
                 continue
             raise RuntimeError(f"Callback '{action}' failed HTTP {resp.status_code}: {resp.text[:300]}")
         except requests.RequestException as exc:
             last_err = exc
             if attempt < 2:
-                sleep_fn(1 + attempt)
+                wait_fn(1 + attempt)
                 continue
             raise RuntimeError(f"Callback '{action}' network error: {exc}") from exc
 
@@ -2003,7 +2006,11 @@ def upsert_via_psycopg2(
             )
             sem_row = cursor.fetchone()
             abort_reason: Optional[str] = None
-            if not sem_row or sem_row.get("deleted_at") is not None:
+            if not sem_row:
+                abort_reason = "SEMESTER_MISSING_OR_DELETED"
+            elif expected_state_version is not None and int(sem_row.get("state_version") or 0) != int(expected_state_version):
+                abort_reason = "TOCTOU_STATE_VERSION_MISMATCH"
+            elif sem_row.get("deleted_at") is not None:
                 abort_reason = "SEMESTER_MISSING_OR_DELETED"
             elif require_active and not sem_row.get("is_active"):
                 abort_reason = "SEMESTER_INACTIVE"
@@ -2011,8 +2018,6 @@ def upsert_via_psycopg2(
                 abort_reason = "SEMESTER_UNPUBLISHED"
             elif require_auto_enabled and sem_row.get("sync_policy") != "AUTO_ENABLED":
                 abort_reason = f"SYNC_POLICY_{sem_row.get('sync_policy') or 'PAUSED'}"
-            elif expected_state_version is not None and int(sem_row.get("state_version") or 0) != int(expected_state_version):
-                abort_reason = "TOCTOU_STATE_VERSION_MISMATCH"
 
             if abort_reason:
                 conn.rollback()
@@ -2040,7 +2045,8 @@ def upsert_via_psycopg2(
         }
 
         incoming_emails: Set[str] = set()
-        value_tuples = []
+        normalized_by_email: Dict[str, Dict[str, Any]] = {}
+        value_tuples_by_email: Dict[str, Tuple[Any, ...]] = {}
 
         for rec in records:
             email_norm = str(rec["email"]).lower().strip()
@@ -2052,8 +2058,9 @@ def upsert_via_psycopg2(
             }
             total_slots = sum(len(clean_schedule[day]) for day in DAYS_OF_WEEK)
             schedule_hash = _compute_schedule_hash(clean_schedule, rec["courses"])
+            normalized_by_email[email_norm] = {"email": email_norm, "schedule_hash": schedule_hash}
 
-            value_tuples.append((
+            value_tuples_by_email[email_norm] = (
                 email_norm,
                 rec.get("semester_id", semester_id),
                 rec["name"],
@@ -2066,7 +2073,9 @@ def upsert_via_psycopg2(
                 rec["total_credit_hours"],
                 schedule_hash,
                 next_ver_floor,
-            ))
+            )
+
+        value_tuples = list(value_tuples_by_email.values())
 
         upsert_query = """
             INSERT INTO public.faculty_schedules (
@@ -2112,9 +2121,10 @@ def upsert_via_psycopg2(
                     "DELETE FROM public.faculty_schedules WHERE lower(trim(email)) = %s AND semester_id = %s;",
                     (existing_email, semester_id),
                 )
-                stats["pruned"] += cursor.rowcount or 1
+                rc = cursor.rowcount
+                stats["pruned"] += rc if isinstance(rc, int) and rc >= 0 else 1
 
-        aggregate_sha256 = compute_aggregate_schedule_sha256(records)
+        aggregate_sha256 = compute_aggregate_schedule_sha256(list(normalized_by_email.values()))
         if audit_summary is not None or audit_report_csv is not None:
             cursor.execute(
                 """
@@ -2198,12 +2208,51 @@ def reconcile_existing_db_rows(
     updated_records = []
     season_lower = (season or "fall").lower().strip()
 
-    for row in rows:
+    merged_rows_by_email: Dict[str, Dict[str, Any]] = {}
+    for raw_row in rows:
+        email_norm = str(raw_row["email"]).lower().strip()
+        raw_sched = raw_row.get("schedule") or {}
+        if isinstance(raw_sched, str):
+            raw_sched = json.loads(raw_sched)
+        raw_courses = raw_row.get("courses") or []
+        if isinstance(raw_courses, str):
+            raw_courses = json.loads(raw_courses)
+        if email_norm not in merged_rows_by_email:
+            row_copy = dict(raw_row)
+            row_copy["email"] = email_norm
+            row_copy["schedule"] = (
+                {
+                    d: list(raw_sched.get(d, [])) if isinstance(raw_sched.get(d), list) else []
+                    for d in DAYS_OF_WEEK
+                }
+                if isinstance(raw_sched, dict)
+                else {}
+            )
+            row_copy["courses"] = list(raw_courses) if isinstance(raw_courses, list) else []
+            merged_rows_by_email[email_norm] = row_copy
+        else:
+            existing_entry = merged_rows_by_email[email_norm]
+            if isinstance(raw_sched, dict):
+                if not isinstance(existing_entry.get("schedule"), dict):
+                    existing_entry["schedule"] = {d: [] for d in DAYS_OF_WEEK}
+                for d in DAYS_OF_WEEK:
+                    day_slots = raw_sched.get(d)
+                    if isinstance(day_slots, list):
+                        existing_entry["schedule"].setdefault(d, []).extend(day_slots)
+            if isinstance(raw_courses, list):
+                existing_entry["courses"].extend(raw_courses)
+            for field in ("name", "designation", "department", "office"):
+                if not existing_entry.get(field) and raw_row.get(field):
+                    existing_entry[field] = raw_row.get(field)
+            existing_entry["total_credit_hours"] = max(
+                float(existing_entry.get("total_credit_hours") or 0),
+                float(raw_row.get("total_credit_hours") or 0),
+            )
+
+    for row in merged_rows_by_email.values():
         email = str(row["email"]).lower().strip()
         existing_schedule = row.get("schedule") or {}
         existing_courses = row.get("courses") or []
-        if isinstance(existing_courses, str):
-            existing_courses = json.loads(existing_courses)
 
         # Build batch lookup from existing official schedule slots only
         existing_batch_lookup: Dict[Tuple[str, str, bool], str] = {}
@@ -2407,24 +2456,35 @@ def sync_from_existing_database(
     if not HAS_PSYCOPG2:
         raise RuntimeError("psycopg2 is required for database sync. Run: pip install psycopg2-binary")
 
-    if semester_id == "auto" or not semester_id:
-        cfg = get_active_semester_config()
-        resolved_sem_id = str(cfg["semester_id"])
-    else:
-        resolved_sem_id = semester_id
-
     conn_db = psycopg2.connect(db_url)
     cur_db = conn_db.cursor(cursor_factory=RealDictCursor)
     try:
-        cur_db.execute(
-            """
-            SELECT id, academic_year, season, sync_policy, state_version, is_active, is_published, deleted_at
-            FROM public.semesters
-            WHERE id = %s;
-            """,
-            (resolved_sem_id,),
-        )
-        sem_row = cur_db.fetchone()
+        if semester_id == "auto" or not semester_id:
+            cur_db.execute(
+                """
+                SELECT id, academic_year, season, sync_policy, state_version, is_active, is_published, deleted_at
+                FROM public.semesters
+                WHERE is_active = true AND is_published = true AND deleted_at IS NULL
+                ORDER BY updated_at DESC NULLS LAST, created_at DESC
+                LIMIT 1;
+                """
+            )
+            sem_row = cur_db.fetchone()
+            if not sem_row:
+                print("[ABORT] No active published semester found in public.semesters.")
+                return {"aborted": True, "reason": "SEMESTER_MISSING_OR_DELETED"}
+            resolved_sem_id = str(sem_row["id"])
+        else:
+            resolved_sem_id = semester_id
+            cur_db.execute(
+                """
+                SELECT id, academic_year, season, sync_policy, state_version, is_active, is_published, deleted_at
+                FROM public.semesters
+                WHERE id = %s;
+                """,
+                (resolved_sem_id,),
+            )
+            sem_row = cur_db.fetchone()
         if not sem_row or sem_row.get("deleted_at") is not None:
             print(f"[ABORT] Semester '{resolved_sem_id}' not found or soft-deleted.")
             return {"aborted": True, "reason": "SEMESTER_MISSING_OR_DELETED"}
@@ -2545,6 +2605,7 @@ def _mark_job_failed(db_url: str, job_id: str, error_code: str, error_message: s
             """,
             (error_code[:64], error_message[:1000], job_id),
         )
+        _write_marker_file("INGEST_FAIL_MARKER_PATH")
     except Exception as exc:
         print(f"[ERROR] Failed to mark ingestion job '{job_id}' FAILED: {exc}")
     finally:
@@ -2554,25 +2615,44 @@ def _mark_job_failed(db_url: str, job_id: str, error_code: str, error_message: s
             conn.close()
 
 
-def _claim_ingestion_job(db_url: str, job_id: str) -> Optional[Dict[str, Any]]:
+def _claim_ingestion_job(
+    db_url: str,
+    job_id: str,
+    expected_job_types: Optional[Tuple[str, ...]] = None,
+) -> Optional[Dict[str, Any]]:
     """Atomically claims a QUEUED ingestion job (`QUEUED` -> `RUNNING`)."""
     conn = psycopg2.connect(db_url)
     conn.autocommit = False
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute(
-            """
-            UPDATE public.ingestion_jobs
-            SET status = 'RUNNING',
-                started_at = timezone('utc'::text, now()),
-                heartbeat_at = timezone('utc'::text, now()),
-                progress_step = 'CLAIMING_JOB',
-                github_run_id = COALESCE(%s, github_run_id)
-            WHERE id = %s AND status = 'QUEUED'
-            RETURNING *;
-            """,
-            (os.environ.get("GITHUB_RUN_ID"), job_id),
-        )
+        if expected_job_types:
+            cursor.execute(
+                """
+                UPDATE public.ingestion_jobs
+                SET status = 'RUNNING',
+                    started_at = timezone('utc'::text, now()),
+                    heartbeat_at = timezone('utc'::text, now()),
+                    progress_step = 'CLAIMING_JOB',
+                    github_run_id = COALESCE(%s, github_run_id)
+                WHERE id = %s AND status = 'QUEUED' AND job_type = ANY(%s)
+                RETURNING *;
+                """,
+                (os.environ.get("GITHUB_RUN_ID"), job_id, list(expected_job_types)),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE public.ingestion_jobs
+                SET status = 'RUNNING',
+                    started_at = timezone('utc'::text, now()),
+                    heartbeat_at = timezone('utc'::text, now()),
+                    progress_step = 'CLAIMING_JOB',
+                    github_run_id = COALESCE(%s, github_run_id)
+                WHERE id = %s AND status = 'QUEUED'
+                RETURNING *;
+                """,
+                (os.environ.get("GITHUB_RUN_ID"), job_id),
+            )
         claimed = cursor.fetchone()
         conn.commit()
         return dict(claimed) if claimed else None
@@ -2705,7 +2785,7 @@ def run_draft_job(
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for draft ingestion.")
 
     job_id = validate_uuid(job_id, "job_id")
-    job = _claim_ingestion_job(db_url, job_id)
+    job = _claim_ingestion_job(db_url, job_id, expected_job_types=("NEW_DRAFT", "RETRY_JOB"))
     if not job:
         print(f"[INFO] Ingestion job '{job_id}' is not in QUEUED state; exiting cleanly.")
         return {"claimed": False, "job_id": job_id}
@@ -2725,7 +2805,7 @@ def run_draft_job(
         cur_meta = conn_meta.cursor(cursor_factory=RealDictCursor)
         try:
             cur_meta.execute(
-                "SELECT id, academic_year, season FROM public.semesters WHERE id = %s;",
+                "SELECT id, academic_year, season FROM public.semesters WHERE id = %s AND deleted_at IS NULL;",
                 (semester_id,),
             )
             sem_meta = cur_meta.fetchone()
@@ -2888,7 +2968,7 @@ def run_refresh_draft_job(
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for refresh-draft.")
 
     job_id = validate_uuid(job_id, "job_id")
-    job = _claim_ingestion_job(db_url, job_id)
+    job = _claim_ingestion_job(db_url, job_id, expected_job_types=("REFRESH_DRAFT_SHEET",))
     if not job:
         print(f"[INFO] Refresh job '{job_id}' is not in QUEUED state; exiting cleanly.")
         return {"claimed": False, "job_id": job_id}
@@ -2896,9 +2976,13 @@ def run_refresh_draft_job(
     copied_snapshot_path: Optional[str] = None
     try:
         semester_id = str(job["semester_id"])
-        source_snapshot_id = str(job.get("source_snapshot_id") or "").strip()
-        if not source_snapshot_id:
+        raw_src_snap = str(job.get("source_snapshot_id") or "").strip()
+        if not raw_src_snap:
             raise JobError("MISSING_PARSED_ALLOCATIONS", "Refresh job lacks source_snapshot_id.")
+        try:
+            source_snapshot_id = validate_uuid(raw_src_snap, "source_snapshot_id")
+        except ValueError as exc:
+            raise JobError("MISSING_PARSED_ALLOCATIONS", str(exc)) from exc
         try:
             google_sheet_id = validate_spreadsheet_id(job.get("google_sheet_id") or "")
         except ValueError as exc:
@@ -2913,7 +2997,7 @@ def run_refresh_draft_job(
                        sem.academic_year, sem.season
                 FROM public.semester_snapshots ss
                 JOIN public.semesters sem ON sem.id = ss.semester_id
-                WHERE ss.id = %s AND ss.semester_id = %s;
+                WHERE ss.id = %s AND ss.semester_id = %s AND sem.deleted_at IS NULL;
                 """,
                 (source_snapshot_id, semester_id),
             )
@@ -3130,18 +3214,25 @@ def run_reconcile_snapshot(
 
     semester_id = str(snap_row["semester_id"])
     try:
-        if snap_row.get("deleted_at") is not None or not snap_row.get("is_published"):
-            raise JobError(
-                "SEMESTER_UNPUBLISHED",
-                f"Semester '{semester_id}' is unpublished or soft-deleted; cannot reconcile.",
-            )
-
         if int(snap_row.get("state_version") or 0) != expected_version:
             print(
                 f"[ABORT] Snapshot reconcile stale: expected state_version={expected_version}, "
                 f"found {snap_row.get('state_version')}."
             )
             return {"aborted": True, "reason": "TOCTOU_STATE_VERSION_MISMATCH"}
+
+        if snap_row.get("deleted_at") is not None or not snap_row.get("is_published"):
+            raise JobError(
+                "SEMESTER_UNPUBLISHED",
+                f"Semester '{semester_id}' is unpublished or soft-deleted; cannot reconcile.",
+            )
+
+        snap_status = str(snap_row.get("status") or "").upper()
+        if snap_status not in ("LIVE", "SUPERSEDED", "ROLLED_BACK"):
+            raise JobError(
+                "INVALID_SNAPSHOT_STATUS",
+                f"Snapshot '{snapshot_id}' has status '{snap_status}'; expected LIVE, SUPERSEDED, or ROLLED_BACK.",
+            )
 
         raw_sheet = (snap_row.get("sem_sheet_id") or snap_row.get("snap_sheet_id") or "").strip()
         try:
@@ -3252,6 +3343,14 @@ def run_reconcile_snapshot(
 
         if not records:
             raise JobError("EMPTY_DRAFT", "Reconcile compiled zero faculty schedules; aborting before live write.")
+
+        resolved_cb_url = (portal_callback_url or os.environ.get("PORTAL_CALLBACK_URL") or "").strip()
+        resolved_cb_secret = (callback_secret or os.environ.get("SYNC_CALLBACK_SECRET") or "").strip()
+        if not resolved_cb_url or not resolved_cb_secret:
+            raise JobError(
+                "MISSING_CALLBACK_CONFIG",
+                "PORTAL_CALLBACK_URL and SYNC_CALLBACK_SECRET are required before committing reconciled schedules.",
+            )
 
         upsert_res = upsert_via_psycopg2(
             records,

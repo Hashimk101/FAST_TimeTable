@@ -51,31 +51,33 @@ jobs:
           CI: 'true'
           EVENT_ACTION: ${{ github.event.action }}
           JOB_ID: ${{ github.event.client_payload.job_id }}
+          INGEST_FAIL_MARKER_PATH: /tmp/ingest_job_marked
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
+          rm -f /tmp/ingest_job_marked
           if [ "$EVENT_ACTION" = "refresh_draft_sheet" ]; then
             python sync_faculty_to_supabase.py --mode refresh-draft --job-id "$JOB_ID"
           else
             python sync_faculty_to_supabase.py --mode draft --job-id "$JOB_ID"
           fi
 
-      - name: Mark Job Failed on Runner Setup Crash
-        if: failure() && steps.run_ingest.outcome != 'failure'
+      - name: Mark Job Failed on Runner Setup or Pre-Claim Crash
+        if: failure()
         env:
           JOB_ID: ${{ github.event.client_payload.job_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && [ -n "$JOB_ID" ]; then
+          if [ ! -f /tmp/ingest_job_marked ] && [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && [ -n "$JOB_ID" ]; then
             NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             curl -sS -X PATCH \
               "${SUPABASE_URL%/}/rest/v1/ingestion_jobs?id=eq.${JOB_ID}&status=in.(QUEUED,RUNNING)" \
               -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
               -H "Content-Type: application/json" \
-              -d "{\"status\":\"FAILED\",\"error_code\":\"RUNNER_SETUP_FAILED\",\"error_message\":\"Workflow failed before Python worker executed\",\"completed_at\":\"${NOW_ISO}\"}" || true
+              -d "{\"status\":\"FAILED\",\"error_code\":\"RUNNER_SETUP_FAILED\",\"error_message\":\"Workflow failed before Python worker marked failure\",\"completed_at\":\"${NOW_ISO}\"}" || true
           fi
 
   reconcile-faculty:
@@ -113,19 +115,21 @@ jobs:
           CI: 'true'
           SNAPSHOT_ID: ${{ github.event.client_payload.snapshot_id }}
           EXPECTED_VERSION: ${{ github.event.client_payload.expected_state_version }}
+          SYNC_CB_MARKER_PATH: /tmp/faculty_cb_sent
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SYNC_CALLBACK_SECRET: ${{ secrets.SYNC_CALLBACK_SECRET }}
           PORTAL_CALLBACK_URL: ${{ secrets.PORTAL_CALLBACK_URL }}
         run: |
+          rm -f /tmp/faculty_cb_sent
           python sync_faculty_to_supabase.py \
             --mode reconcile-snapshot \
             --snapshot-id "$SNAPSHOT_ID" \
             --expected-version "$EXPECTED_VERSION"
 
-      - name: Send FAILED Callback on Runner Setup Crash
-        if: failure() && steps.reconcile.outcome != 'failure'
+      - name: Send FAILED Callback on Unhandled Setup or Pre-Callback Failure
+        if: failure()
         env:
           CI: 'true'
           SNAPSHOT_ID: ${{ github.event.client_payload.snapshot_id }}
@@ -137,6 +141,8 @@ jobs:
         run: |
           python - <<'PY'
           import hashlib, hmac, json, os, time, urllib.request
+          if os.path.exists("/tmp/faculty_cb_sent"):
+              raise SystemExit(0)
           snap_id = os.environ.get("SNAPSHOT_ID", "").strip()
           exp_ver = os.environ.get("EXPECTED_VERSION", "").strip()
           supa_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
@@ -158,7 +164,7 @@ jobs:
               "semester_id": sem_id,
               "state_version": int(exp_ver),
               "status": "FAILED",
-              "error_message": "RUNNER_SETUP_FAILED: Workflow failed before snapshot reconcile started",
+              "error_message": "RUNNER_SETUP_FAILED: Workflow failed before snapshot reconcile callback completed",
           }, separators=(",", ":"))
           ts = str(int(time.time()))
           sig = hmac.new(cb_sec.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
