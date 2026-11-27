@@ -148,6 +148,8 @@ jobs:
           supa_url = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
           supa_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
           cb_url = os.environ.get("PORTAL_CALLBACK_URL", "").strip().rstrip("/")
+          if cb_url and not cb_url.lower().startswith(("http://", "https://")):
+              cb_url = f"https://{cb_url}"
           cb_sec = os.environ.get("SYNC_CALLBACK_SECRET", "").strip()
           if not (snap_id and exp_ver and supa_url and supa_key and cb_url and cb_sec):
               raise SystemExit(0)
@@ -311,6 +313,8 @@ jobs:
           sem_id = os.environ.get("RESOLVED_SEMESTER_ID", "").strip() or os.environ.get("PAYLOAD_SEMESTER_ID", "").strip()
           state_ver = os.environ.get("RESOLVED_STATE_VERSION", "").strip()
           cb_url = os.environ.get("PORTAL_CALLBACK_URL", "").strip().rstrip("/")
+          if cb_url and not cb_url.lower().startswith(("http://", "https://")):
+              cb_url = f"https://{cb_url}"
           cb_sec = os.environ.get("SYNC_CALLBACK_SECRET", "").strip()
           if not state_ver and sem_id and os.environ.get("DATABASE_URL"):
               try:

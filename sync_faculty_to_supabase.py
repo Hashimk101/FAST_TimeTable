@@ -1929,6 +1929,8 @@ def send_sync_callback(
         raise ValueError(f"Unsupported callback action: {action!r}")
 
     base_url = (portal_callback_url or os.environ.get("PORTAL_CALLBACK_URL") or "").strip().rstrip("/")
+    if base_url and not base_url.lower().startswith(("http://", "https://")):
+        base_url = f"https://{base_url}"
     secret = (callback_secret or os.environ.get("SYNC_CALLBACK_SECRET") or "").strip()
     if not base_url or not secret:
         raise RuntimeError("PORTAL_CALLBACK_URL and SYNC_CALLBACK_SECRET are required for signed callbacks.")

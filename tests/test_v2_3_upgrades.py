@@ -981,6 +981,31 @@ class TestUpgrade4And5HardeningAndContracts(unittest.TestCase):
             "https://fast-faculty-timetable.pages.dev/api/semesters?action=student_sync_callback",
         )
 
+    def test_send_sync_callback_prepends_https_when_scheme_missing(self):
+        fake_resp = mock.MagicMock()
+        fake_resp.ok = True
+        fake_resp.json.return_value = {"ok": True, "updated": True}
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PORTAL_CALLBACK_URL": "fast-faculty-timetable.pages.dev/",
+                "SYNC_CALLBACK_SECRET": "super-secret",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(sfs.requests, "post", return_value=fake_resp) as mock_post:
+                res = sfs.send_sync_callback(
+                    "student_sync_callback",
+                    "2027-spring",
+                    12,
+                    "SYNCED",
+                )
+        self.assertTrue(res["updated"])
+        self.assertEqual(
+            mock_post.call_args.args[0],
+            "https://fast-faculty-timetable.pages.dev/api/semesters?action=student_sync_callback",
+        )
+
     def test_sync_yml_routes_and_concurrency_groups(self):
         yml_path = os.path.join(ROOT_DIR, ".github", "workflows", "sync.yml")
         with open(yml_path, "r", encoding="utf-8") as f:
