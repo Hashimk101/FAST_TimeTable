@@ -176,6 +176,7 @@ jobs:
               method="POST",
               headers={
                   "Content-Type": "application/json",
+                  "User-Agent": "FAST-TimeTable-Actions/1.0",
                   "X-Timestamp": ts,
                   "X-Signature": f"sha256={sig}",
               },
@@ -343,6 +344,7 @@ jobs:
               method="POST",
               headers={
                   "Content-Type": "application/json",
+                  "User-Agent": "FAST-TimeTable-Actions/1.0",
                   "X-Timestamp": ts,
                   "X-Signature": f"sha256={sig}",
               },
